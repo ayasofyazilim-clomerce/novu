@@ -2,8 +2,10 @@ packages:
   # all packages in subdirs of packages/ and components/
   - 'automation'
   - 'packages/*'
-  # Angular projects - these are nested under the Angular workspace root, and need version bumps during release.
-  - 'packages/notification-center-angular/projects/*'
+  - '!packages/notification-center-angular/'
+  - '!packages/notification-center-vue/'
+  # # Angular projects - these are nested under the Angular workspace root, and need version bumps during release.
+  # - 'packages/notification-center-angular/projects/*'
   - 'apps/*'
   - 'libs/*'
   # exclude packages that are inside test directories
