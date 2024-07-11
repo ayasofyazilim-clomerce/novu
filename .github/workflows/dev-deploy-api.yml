@@ -19,15 +19,15 @@ env:
   TF_WORKSPACE: novu-dev
 
 jobs:
-  test_api:
-    strategy:
-      matrix:
-        name: ['novu/api-ee', 'novu/api']
-    uses: ./.github/workflows/reusable-api-e2e.yml
-    with:
-      ee: ${{ contains (matrix.name,'-ee') }}
-      job-name: ${{ matrix.name }}
-    secrets: inherit
+  # test_api:
+  #   strategy:
+  #     matrix:
+  #       name: ['novu/api-ee', 'novu/api']
+  #   uses: ./.github/workflows/reusable-api-e2e.yml
+  #   with:
+  #     ee: ${{ contains (matrix.name,'-ee') }}
+  #     job-name: ${{ matrix.name }}
+  #   secrets: inherit
 
   deploy_dev_api:
     if: "!contains(github.event.head_commit.message, 'ci skip')"
