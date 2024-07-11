@@ -45,7 +45,7 @@ runs:
 
     - name: 🛟 Install dependencies
       shell: bash
-      run: pnpm install --frozen-lockfile
+      run: pnpm install
 
     - name: Link submodules
       shell: bash
