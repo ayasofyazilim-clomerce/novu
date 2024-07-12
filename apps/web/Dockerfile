@@ -24,7 +24,7 @@ COPY pnpm-workspace.yaml .
 COPY pnpm-lock.yaml .
 
 RUN --mount=type=cache,id=pnpm-store-web,target=/root/.pnpm-store\
-  pnpm install --frozen-lockfile
+  pnpm install --no-frozen-lockfile
 
 RUN pnpm add @babel/core -w
 

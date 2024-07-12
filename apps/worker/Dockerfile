@@ -23,7 +23,7 @@ RUN --mount=type=secret,id=BULL_MQ_PRO_NPM_TOKEN,uid=1000 export BULL_MQ_PRO_NPM
 RUN --mount=type=cache,id=pnpm-store-worker,target=/root/.pnpm-store\
     --mount=type=secret,id=BULL_MQ_PRO_NPM_TOKEN,uid=1000 export BULL_MQ_PRO_NPM_TOKEN=$(cat /run/secrets/BULL_MQ_PRO_NPM_TOKEN) && \
  pnpm install --filter "novuhq" --filter "{${PACKAGE_PATH}}..."\
- --frozen-lockfile\
+ --no-frozen-lockfile\
  --unsafe-perm\
  --reporter=silent
 
@@ -62,7 +62,7 @@ COPY --chown=1000:1000 --from=assets /usr/src/app .
 RUN --mount=type=cache,id=pnpm-store-worker,target=/root/.pnpm-store\
     --mount=type=secret,id=BULL_MQ_PRO_NPM_TOKEN,uid=1000 export BULL_MQ_PRO_NPM_TOKEN=$(cat /run/secrets/BULL_MQ_PRO_NPM_TOKEN) && \
  pnpm install --filter "{${PACKAGE_PATH}}..." \
- --frozen-lockfile \
+ --no-frozen-lockfile \
  --unsafe-perm \
  --reporter=silent
 
