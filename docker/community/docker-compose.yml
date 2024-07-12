@@ -26,7 +26,9 @@ services:
     ports:
       - 27017:27017
   api:
-    image: 'ghcr.io/novuhq/novu/api:0.24.0'
+    build:
+      dockerfile: "./apps/api/Dockerfile"
+      context: "../.."
     depends_on:
       - mongodb
       - redis
@@ -67,7 +69,9 @@ services:
     ports:
       - '3000:3000'
   worker:
-    image: 'ghcr.io/novuhq/novu/worker:0.24.0'
+    build:
+      dockerfile: "./apps/worker/Dockerfile"
+      context: "../.."
     depends_on:
       - mongodb
       - redis
@@ -101,7 +105,9 @@ services:
       MULTICAST_QUEUE_CHUNK_SIZE: ${MULTICAST_QUEUE_CHUNK_SIZE}
       IS_MULTI_TENANCY_ENABLED: ${IS_MULTI_TENANCY_ENABLED}
   ws:
-    image: 'ghcr.io/novuhq/novu/ws:0.24.0'
+    build:
+      dockerfile: "./apps/ws/Dockerfile"
+      context: "../.."
     depends_on:
       - mongodb
       - redis
@@ -127,7 +133,9 @@ services:
     ports:
       - '3002:3002'
   web:
-    image: 'ghcr.io/novuhq/novu/web:0.24.0'
+    build:
+      dockerfile: "./apps/web/Dockerfile"
+      context: "../.."
     depends_on:
       - api
       - worker
@@ -148,7 +156,9 @@ services:
     ports:
       - 4200:4200
   widget:
-    image: 'ghcr.io/novuhq/novu/widget:0.24.0'
+    build:
+      dockerfile: "./apps/widget/Dockerfile"
+      context: "../.."
     depends_on:
       - api
       - worker
@@ -170,7 +180,9 @@ services:
   embed:
     depends_on:
       - widget
-    image: 'ghcr.io/novuhq/novu/embed:0.24.0'
+    build:
+      dockerfile: "./libs/embed/Dockerfile"
+      context: "../.."
     container_name: embed
     restart: unless-stopped
     logging:
