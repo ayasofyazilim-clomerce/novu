@@ -67,7 +67,7 @@ services:
       API_CONTEXT_PATH: ${API_CONTEXT_PATH}
       IS_MULTI_TENANCY_ENABLED: ${IS_MULTI_TENANCY_ENABLED}
     ports:
-      - '3000:3000'
+      - '65424:65424'
   worker:
     build:
       dockerfile: "./apps/worker/Dockerfile"

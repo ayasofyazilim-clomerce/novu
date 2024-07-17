@@ -15,7 +15,7 @@ const isPlaywright = isBrowser() && (window as any).isPlaywright;
 export const API_ROOT =
   window._env_.REACT_APP_API_URL || isPlaywright
     ? window._env_.REACT_APP_API_URL || process.env.REACT_APP_API_URL || 'http://localhost:1336'
-    : window._env_.REACT_APP_API_URL || process.env.REACT_APP_API_URL || 'http://localhost:3000';
+    : window._env_.REACT_APP_API_URL || process.env.REACT_APP_API_URL || 'http://localhost:65424';
 
 export const WS_URL = isPlaywright
   ? window._env_.REACT_APP_WS_URL || process.env.REACT_APP_WS_URL || 'http://localhost:1340'

@@ -9,8 +9,8 @@ metadata:
   name: api
 spec:
   ports:
-    - name: "3000"
-      port: 3000
-      targetPort: 3000
+    - name: "65424"
+      port: 65424
+      targetPort: 65424
   selector:
     app.novu.co/name: api

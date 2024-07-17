@@ -100,7 +100,7 @@ api:
   ## @param api.containerPorts.http novu api HTTP container port
   ##
   containerPorts:
-    http: 3000
+    http: 65424
   ## Configure extra options for novu api containers' liveness and readiness probes
   ## ref: https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-probes/#configure-probes
   ## @param api.livenessProbe.enabled Enable livenessProbe on novu api containers
@@ -350,7 +350,7 @@ api:
 
   ## @param api.port The port on which the API backend should listen on
   ##
-  port: 3000
+  port: 65424
 
   env:
     ## @param api.env.NODE_ENV The environment of the app.
@@ -358,7 +358,7 @@ api:
     NODE_ENV: production
     ## @param api.env.API_ROOT_URL Define the required env for novu
     ##
-    API_ROOT_URL: http://novu-api:3000
+    API_ROOT_URL: http://novu-api:65424
     ## @param api.env.DISABLE_USER_REGISTRATION If users should not be able to create new accounts. Possible values are: true, false
     ##
     DISABLE_USER_REGISTRATION: true
@@ -1570,7 +1570,7 @@ web:
 
   ## @param web.apiExternalEndpoint The external endpoint of the API
   ##
-  apiExternalEndpoint: http://127.0.0.1:3000
+  apiExternalEndpoint: http://127.0.0.1:65424
 
   ## @param web.wsExternalEndpoint The external websocket endpoint of the API
   wsExternalEndpoint: ws://127.0.0.1:3002

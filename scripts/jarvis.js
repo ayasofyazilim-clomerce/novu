@@ -101,7 +101,7 @@ async function setupRunner() {
 
       await waitPort({
         host: 'localhost',
-        port: 3000,
+        port: 65424,
       });
       await waitPort({
         host: 'localhost',
@@ -122,7 +122,7 @@ async function setupRunner() {
 
         Web: http://127.0.0.1:4200
         Widget: http://127.0.0.1:4500
-        API: http://127.0.0.1:3000
+        API: http://127.0.0.1:65424
         Worker: http://127.0.0.1:3004
       `);
     } else if (answers.runConfiguration === WEB_PROJECT) {
@@ -135,7 +135,7 @@ async function setupRunner() {
 
         await waitPort({
           host: 'localhost',
-          port: 3000,
+          port: 65424,
         });
         await waitPort({
           host: 'localhost',
@@ -154,7 +154,7 @@ async function setupRunner() {
           Everything is running 🎊
         
           Web: http://127.0.0.1:4200
-          API: http://127.0.0.1:3000
+          API: http://127.0.0.1:65424
           WS: http://127.0.0.1:3002
           Worker: http://127.0.0.1:3004
         `);
@@ -168,7 +168,7 @@ async function setupRunner() {
 
       await waitPort({
         host: 'localhost',
-        port: 3000,
+        port: 65424,
       });
       await waitPort({
         host: 'localhost',
@@ -178,7 +178,7 @@ async function setupRunner() {
       console.log(`
         Everything is running 🎊
 
-        API: http://127.0.0.1:3000
+        API: http://127.0.0.1:65424
         Worker: http://127.0.0.1:3004
       `);
     } else if (answers.runApiConfiguration === API_INTEGRATION_TESTS) {
@@ -252,7 +252,7 @@ const informAboutInitialSetup = () => {
 
     rl.question(
       'Looks like its the first time running this project on your machine. We will start by installing pnpm dependencies. ' +
-        '\nDo you want to continue? Yes/No\n',
+      '\nDo you want to continue? Yes/No\n',
       function (answer) {
         if (answer.toLowerCase() === 'yes' || answer.toLowerCase() === 'y') {
           rl.close();
