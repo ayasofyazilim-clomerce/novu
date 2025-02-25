@@ -71,7 +71,7 @@
     "default": {
       "options": {
         "canTrackAnalytics": false,
-        "nxCloudId": "61d98cffc3343830d132e541"
+        "nxCloudId": "67bd7907c8c2fcf977f4f543"
       },
       "runner": "nx-cloud"
     }
