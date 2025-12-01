@@ -1,6 +1,5 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
-import { ClassConstructor, plainToInstance } from 'class-transformer';
 import { DirectionEnum } from '@novu/shared';
+import { ClassConstructor, plainToInstance } from 'class-transformer';
 import {
   ClientSession,
   FilterQuery,
@@ -8,6 +7,7 @@ import {
   ProjectionType,
   QueryOptions,
   QueryWithHelpers,
+  SortOrder,
   Types,
   UpdateQuery,
 } from 'mongoose';
@@ -44,10 +44,29 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
     return new Types.ObjectId(value);
   }
 
-  async count(query: FilterQuery<T_DBModel> & T_Enforcement, limit?: number): Promise<number> {
+  async count(
+    query: FilterQuery<T_DBModel> & T_Enforcement,
+    limit?: number,
+    readPreference?: 'secondaryPreferred' | 'primary'
+  ): Promise<number> {
     return this.MongooseModel.countDocuments(query, {
       limit,
+      readPreference: readPreference || 'primary',
     });
+  }
+
+  private async getCountWithLimit(
+    query: FilterQuery<T_DBModel> & T_Enforcement,
+    maxLimit: number = 50001
+  ): Promise<{ count: number; hasMore: boolean }> {
+    const result = await this.count(query, maxLimit, 'secondaryPreferred');
+    const count = result;
+    const hasMore = count === maxLimit;
+
+    return {
+      count: hasMore ? maxLimit - 1 : count,
+      hasMore,
+    };
   }
 
   async estimatedDocumentCount(): Promise<number> {
@@ -61,11 +80,23 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
   async findOne(
     query: FilterQuery<T_DBModel> & T_Enforcement,
     select?: ProjectionType<T_MappedEntity>,
-    options: { readPreference?: 'secondaryPreferred' | 'primary'; query?: QueryOptions<T_DBModel> } = {}
+    options: {
+      readPreference?: 'secondaryPreferred' | 'primary';
+      query?: QueryOptions<T_DBModel>;
+      session?: ClientSession | null;
+    } = {}
   ): Promise<T_MappedEntity | null> {
-    const data = await this.MongooseModel.findOne(query, select, options.query).read(
-      options.readPreference || 'primary'
+    const { session, ...queryOptions } = options;
+
+    const queryBuilder = this.MongooseModel.findOne(query, select, queryOptions.query).read(
+      queryOptions.readPreference || 'primary'
     );
+
+    if (session) {
+      queryBuilder.session(session);
+    }
+
+    const data = await queryBuilder;
     if (!data) return null;
 
     return this.mapEntity(data.toObject());
@@ -74,12 +105,15 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
   async findOneAndUpdate(
     query: FilterQuery<T_DBModel> & T_Enforcement,
     update: UpdateQuery<T_DBModel>,
-    options: QueryOptions<T_DBModel> = {}
+    options: QueryOptions<T_DBModel> & { session?: ClientSession | null } = {}
   ): Promise<T_MappedEntity | null> {
+    const { session, ...updateOptions } = options;
+
     const data = await this.MongooseModel.findOneAndUpdate(query, update, {
-      ...options,
-      upsert: options.upsert || false,
-      new: options.new || false,
+      ...updateOptions,
+      upsert: updateOptions.upsert || false,
+      new: updateOptions.new || false,
+      ...(session && { session }),
     });
 
     if (!data) return null;
@@ -87,27 +121,54 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
     return this.mapEntity(data.toObject());
   }
 
-  async delete(query: FilterQuery<T_DBModel> & T_Enforcement): Promise<{
+  async delete(
+    query: FilterQuery<T_DBModel> & T_Enforcement,
+    options: { session?: ClientSession | null } = {}
+  ): Promise<{
     /** Indicates whether this writes result was acknowledged. If not, then all other members of this result will be undefined. */
     acknowledged: boolean;
     /** The number of documents that were deleted */
     deletedCount: number;
   }> {
-    return await this.MongooseModel.deleteMany(query);
+    const { session } = options;
+    const deleteOptions = session ? { session } : {};
+
+    return await this.MongooseModel.deleteMany(query, deleteOptions);
+  }
+
+  async findOneAndDelete(query: FilterQuery<T_DBModel> & T_Enforcement): Promise<T_MappedEntity | null> {
+    const data = await this.MongooseModel.findOneAndDelete(query).lean();
+    if (!data) return null;
+
+    return this.mapEntity(data);
   }
 
   async find(
     query: FilterQuery<T_DBModel> & T_Enforcement,
     select: ProjectionType<T_MappedEntity> = '',
-    options: { limit?: number; sort?: any; skip?: number } = {}
+    options: {
+      limit?: number;
+      sort?: any;
+      skip?: number;
+      session?: ClientSession | null;
+      readPreference?: 'secondaryPreferred' | 'primary';
+    } = {}
   ): Promise<T_MappedEntity[]> {
-    const data = await this.MongooseModel.find(query, select, {
-      sort: options.sort || null,
+    const { session, ...queryOptions } = options;
+
+    const queryBuilder = this.MongooseModel.find(query, select, {
+      sort: queryOptions.sort || null,
     })
-      .skip(options.skip as number)
-      .limit(options.limit as number)
-      .lean()
-      .exec();
+      .skip(queryOptions.skip as number)
+      .limit(queryOptions.limit as number)
+      .read(queryOptions.readPreference || 'primary')
+      .lean();
+
+    if (session) {
+      queryBuilder.session(session);
+    }
+
+    const data = await queryBuilder.exec();
 
     return this.mapEntities(data);
   }
@@ -237,12 +298,19 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
     };
   }
 
-  async create(data: FilterQuery<T_DBModel> & T_Enforcement, options: IOptions = {}): Promise<T_MappedEntity> {
+  async create(
+    data: FilterQuery<T_DBModel> & T_Enforcement,
+    options: IOptions & { session?: ClientSession | null } = {}
+  ): Promise<T_MappedEntity> {
+    const { session, ...saveOptions } = options;
     const newEntity = new this.MongooseModel(data);
 
-    const saveOptions = options?.writeConcern ? { w: options?.writeConcern } : {};
+    const mongooseOptions = saveOptions?.writeConcern ? { w: saveOptions?.writeConcern } : {};
+    if (session) {
+      Object.assign(mongooseOptions, { session });
+    }
 
-    const saved = await newEntity.save(saveOptions);
+    const saved = await newEntity.save(mongooseOptions);
 
     return this.mapEntity(saved);
   }
@@ -273,13 +341,21 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
 
   async update(
     query: FilterQuery<T_DBModel> & T_Enforcement,
-    updateBody: UpdateQuery<T_DBModel>
+    updateBody: UpdateQuery<T_DBModel>,
+    options: QueryOptions<T_DBModel> & {
+      session?: ClientSession | null;
+      writeConcern?: { w: number | 'majority' };
+    } = {}
   ): Promise<{
     matched: number;
     modified: number;
   }> {
+    const { session, ...updateOptions } = options;
+
     const saved = await this.MongooseModel.updateMany(query, updateBody, {
       multi: true,
+      ...updateOptions,
+      ...(session && { session }),
     });
 
     return {
@@ -304,7 +380,9 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
   }
 
   async upsertMany(data: (FilterQuery<T_DBModel> & T_Enforcement)[]) {
-    const promises = data.map((entry) => this.MongooseModel.findOneAndUpdate(entry, entry, { upsert: true }));
+    const promises = data.map((entry) =>
+      this.MongooseModel.findOneAndUpdate(entry, entry, { upsert: true, new: true })
+    );
 
     return await Promise.all(promises);
   }
@@ -338,8 +416,22 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
    *
    * Refer to https://mongoosejs.com/docs/transactions.html#note-about-parallelism-in-transactions
    */
-  async withTransaction(fn: Parameters<ClientSession['withTransaction']>[0]) {
-    return (await this._model.db.startSession()).withTransaction(fn);
+  async withTransaction(fn: (session: ClientSession | null) => Promise<any>) {
+    try {
+      return await (await this._model.db.startSession()).withTransaction(fn);
+    } catch (error) {
+      // Check if the error is related to replica set requirement
+      if (
+        error.message?.includes('replica set') ||
+        error.message?.includes('transaction') ||
+        error.codeName === 'IllegalOperation'
+      ) {
+        // MongoDB is not running in replica set mode, execute without transaction
+        return await fn(null);
+      }
+
+      throw error;
+    }
   }
 
   async findWithCursorBasedPagination({
@@ -351,6 +443,7 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
     sortDirection = DirectionEnum.DESC,
     paginateField,
     enhanceQuery,
+    includeCursor,
   }: {
     query?: FilterQuery<T_DBModel> & T_Enforcement;
     limit: number;
@@ -360,60 +453,107 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
     sortDirection: DirectionEnum;
     paginateField: string;
     enhanceQuery?: (query: QueryWithHelpers<Array<T_DBModel>, T_DBModel>) => any;
-  }): Promise<{ data: T_MappedEntity[]; next: string | null; previous: string | null }> {
+    includeCursor?: boolean;
+  }): Promise<{
+    data: T_MappedEntity[];
+    next: string | null;
+    previous: string | null;
+    totalCount: number;
+    totalCountCapped: boolean;
+  }> {
     if (before && after) {
       throw new DalException('Cannot specify both "before" and "after" cursors at the same time.');
     }
 
     const isDesc = sortDirection === DirectionEnum.DESC;
     const sortValue = isDesc ? -1 : 1;
-
     const paginationQuery: any = { ...query };
+
+    let reverseResults = false;
 
     if (before) {
       paginationQuery.$or = [
         {
-          [sortBy]: isDesc ? { $gt: before.sortBy } : { $lt: before.sortBy },
+          [sortBy]: isDesc
+            ? { [includeCursor ? '$gte' : '$gt']: before.sortBy }
+            : { [includeCursor ? '$lte' : '$lt']: before.sortBy },
         },
         {
           $and: [
             { [sortBy]: { $eq: before.sortBy } },
-            { [paginateField]: isDesc ? { $gt: before.paginateField } : { $lt: before.paginateField } },
+            {
+              [paginateField]: isDesc
+                ? { [includeCursor ? '$gte' : '$gt']: before.paginateField }
+                : { [includeCursor ? '$lte' : '$lt']: before.paginateField },
+            },
           ],
         },
       ];
+
+      // Reverse sort order for backwards pagination
+      reverseResults = true;
     } else if (after) {
       paginationQuery.$or = [
         {
-          [sortBy]: isDesc ? { $lt: after.sortBy } : { $gt: after.sortBy },
+          [sortBy]: isDesc
+            ? { [includeCursor ? '$lte' : '$lt']: after.sortBy }
+            : { [includeCursor ? '$gte' : '$gt']: after.sortBy },
         },
         {
           $and: [
             { [sortBy]: { $eq: after.sortBy } },
-            { [paginateField]: isDesc ? { $lt: after.paginateField } : { $gt: after.paginateField } },
+            {
+              [paginateField]: isDesc
+                ? { [includeCursor ? '$lte' : '$lt']: after.paginateField }
+                : { [includeCursor ? '$gte' : '$gt']: after.paginateField },
+            },
           ],
         },
       ];
     }
 
     let builder = this.MongooseModel.find(paginationQuery)
-      .sort({ [sortBy]: sortValue, [paginateField]: sortValue })
+      .sort({
+        [sortBy]: reverseResults ? -sortValue : sortValue,
+        [paginateField]: reverseResults ? -sortValue : sortValue,
+      } as Record<string, SortOrder>)
       .limit(limit + 1);
 
     if (enhanceQuery) {
       builder = enhanceQuery(builder);
     }
 
-    const rawResults = await builder.exec();
+    // Run find query and count aggregation in parallel
+    const [rawResults, countResult] = await Promise.all([builder.exec(), this.getCountWithLimit(query, 50001)]);
 
     const hasExtraItem = rawResults.length > limit;
-    const pageResults = rawResults.slice(0, limit);
+    const totalCount = countResult.count;
+    const hasMore = countResult.hasMore;
+
+    let startIndex = 0;
+    let endIndex = limit;
+    if (reverseResults) {
+      rawResults.reverse();
+
+      /**
+       * If we have an extra item, we need to adjust the start and end index
+       * as it is reversed, the first item is actually the extra item
+       */
+      if (hasExtraItem) {
+        startIndex = 1;
+        endIndex = limit + 1;
+      }
+    }
+
+    const pageResults = rawResults.slice(startIndex, endIndex);
 
     if (pageResults.length === 0) {
       return {
         data: [],
         next: null,
         previous: null,
+        totalCount: totalCount,
+        totalCountCapped: hasMore,
       };
     }
 
@@ -441,7 +581,9 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
         {
           $and: [
             { [sortBy]: { $eq: lastItem[sortBy] } },
-            { [paginateField]: isDesc ? { $lt: lastItem[paginateField] } : { $gt: lastItem[paginateField] } },
+            {
+              [paginateField]: isDesc ? { $lt: lastItem[paginateField] } : { $gt: lastItem[paginateField] },
+            },
           ],
         },
       ];
@@ -483,7 +625,13 @@ export class BaseRepository<T_DBModel, T_MappedEntity, T_Enforcement> {
       data: this.mapEntities(pageResults),
       next: nextCursor,
       previous: prevCursor,
+      totalCount: totalCount,
+      totalCountCapped: hasMore,
     };
+  }
+
+  protected regExpEscape(literalString: string): string {
+    return literalString.replace(/[-[\]{}()*+!<=:?./\\^$|#\s,]/g, '\\$&');
   }
 }
 

@@ -1,4 +1,5 @@
-import { ChannelTypeEnum, PreferenceOverrideSourceEnum, PreferencesTypeEnum } from '../../types';
+import { SeverityLevelEnum } from '../../consts';
+import { ChannelTypeEnum, PreferenceOverrideSourceEnum, PreferencesTypeEnum, Schedule } from '../../types';
 import { INotificationTrigger } from '../notification-trigger';
 
 export interface IPreferenceChannels {
@@ -24,6 +25,7 @@ interface IPreferenceResponse {
   enabled: boolean;
   channels: IPreferenceChannels;
   overrides: IPreferenceOverride[];
+  schedule?: Schedule;
 }
 
 export interface ITemplateConfiguration {
@@ -32,6 +34,9 @@ export interface ITemplateConfiguration {
   critical: boolean;
   tags?: string[];
   triggers: INotificationTrigger[];
+  updatedAt?: string;
+  createdAt?: string;
+  severity?: SeverityLevelEnum;
 }
 
 export enum PreferenceLevelEnum {

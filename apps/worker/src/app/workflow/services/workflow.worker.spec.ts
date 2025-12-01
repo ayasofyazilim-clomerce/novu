@@ -1,18 +1,16 @@
 import { Test } from '@nestjs/testing';
-import { expect } from 'chai';
-import { setTimeout } from 'timers/promises';
-
 import {
   BullMqService,
+  PinoLogger,
   TriggerEvent,
   WorkflowInMemoryProviderService,
   WorkflowQueueService,
 } from '@novu/application-generic';
-
 import { CommunityOrganizationRepository } from '@novu/dal';
-import { WorkflowWorker } from './workflow.worker';
-
+import { expect } from 'chai';
+import { setTimeout } from 'timers/promises';
 import { WorkflowModule } from '../workflow.module';
+import { WorkflowWorker } from './workflow.worker';
 
 let workflowQueueService: WorkflowQueueService;
 let workflowWorker: WorkflowWorker;
@@ -32,7 +30,12 @@ describe('Workflow Worker', () => {
     );
     const organizationRepository = moduleRef.get<CommunityOrganizationRepository>(CommunityOrganizationRepository);
 
-    workflowWorker = new WorkflowWorker(triggerEventUseCase, workflowInMemoryProviderService, organizationRepository);
+    workflowWorker = new WorkflowWorker(
+      triggerEventUseCase,
+      workflowInMemoryProviderService,
+      organizationRepository,
+      new PinoLogger({})
+    );
 
     workflowQueueService = new WorkflowQueueService(workflowInMemoryProviderService);
     await workflowQueueService.queue.obliterate();

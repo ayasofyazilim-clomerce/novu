@@ -1,19 +1,22 @@
-import { SubscriberDrawer } from '@/components/subscribers/subscriber-drawer';
-import { useEnvironment } from '@/context/environment/hooks';
-import { useOnElementUnmount } from '@/hooks/use-on-element-unmount';
-import { buildRoute, ROUTES } from '@/utils/routes';
+import { PermissionsEnum } from '@novu/shared';
 import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
+import { useSubscribersNavigate } from '@/components/subscribers/hooks/use-subscribers-navigate';
+import { SubscriberDrawer } from '@/components/subscribers/subscriber-drawer';
+import { useHasPermission } from '@/hooks/use-has-permission';
+import { useOnElementUnmount } from '@/hooks/use-on-element-unmount';
 
 export function EditSubscriberPage() {
   const { subscriberId } = useParams<{ subscriberId: string }>();
-  const navigate = useNavigate();
-  const { currentEnvironment } = useEnvironment();
   const [open, setOpen] = useState(true);
+  const { navigateToSubscribersCurrentPage } = useSubscribersNavigate();
+  const has = useHasPermission();
+
+  const isReadOnly = !has({ permission: PermissionsEnum.SUBSCRIBER_WRITE });
 
   const { ref: unmountRef } = useOnElementUnmount({
     callback: () => {
-      navigate(buildRoute(ROUTES.SUBSCRIBERS, { environmentSlug: currentEnvironment?.slug ?? '' }));
+      navigateToSubscribersCurrentPage();
     },
     condition: !open,
   });
@@ -22,5 +25,13 @@ export function EditSubscriberPage() {
     return null;
   }
 
-  return <SubscriberDrawer ref={unmountRef} subscriberId={subscriberId} open={open} onOpenChange={setOpen} />;
+  return (
+    <SubscriberDrawer
+      ref={unmountRef}
+      subscriberId={subscriberId}
+      open={open}
+      onOpenChange={setOpen}
+      readOnly={isReadOnly}
+    />
+  );
 }

@@ -2,11 +2,10 @@
 
 import { Slot } from '@radix-ui/react-slot';
 import * as React from 'react';
-
+import { RiCloseFill } from 'react-icons/ri';
 import { PolymorphicComponentProps } from '@/utils/polymorphic';
 import { recursiveCloneChildren } from '@/utils/recursive-clone-children';
 import { tv, type VariantProps } from '@/utils/tv';
-import { RiCloseFill } from 'react-icons/ri';
 
 const TAG_ROOT_NAME = 'TagRoot';
 const TAG_ICON_NAME = 'TagIcon';
@@ -161,18 +160,19 @@ TagDismissIcon.displayName = TAG_DISMISS_ICON_NAME;
 type TagProps = {
   children: React.ReactNode;
   icon?: React.ReactElement;
-  onDismiss?: () => void;
+  onDismiss?: React.MouseEventHandler<HTMLButtonElement>;
   asChild?: boolean;
   className?: string;
+  dismissTestId?: string;
 } & Pick<VariantProps<typeof tagVariants>, 'variant' | 'disabled'>;
 
 const Tag = React.forwardRef<HTMLDivElement, TagProps>(
-  ({ children, icon, onDismiss, asChild, variant, disabled, className }, ref) => {
+  ({ children, icon, onDismiss, asChild, variant, disabled, className, dismissTestId, ...rest }, ref) => {
     return (
-      <TagRoot ref={ref} asChild={asChild} variant={variant} disabled={disabled} className={className}>
+      <TagRoot ref={ref} asChild={asChild} variant={variant} disabled={disabled} className={className} {...rest}>
         {icon && <TagIcon as={icon.type} {...icon.props} />}
         {children}
-        {onDismiss && <TagDismissButton onClick={onDismiss} disabled={disabled} />}
+        {onDismiss && <TagDismissButton onClick={onDismiss} disabled={disabled} data-testid={dismissTestId} />}
       </TagRoot>
     );
   }

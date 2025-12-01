@@ -1,10 +1,9 @@
 import { Slot } from '@radix-ui/react-slot';
 import * as React from 'react';
-
+import { IconType } from 'react-icons';
 import type { PolymorphicComponentProps } from '@/utils/polymorphic';
 import { recursiveCloneChildren } from '@/utils/recursive-clone-children';
 import { tv, type VariantProps } from '@/utils/tv';
-import { IconType } from 'react-icons';
 import { AUTOCOMPLETE_PASSWORD_MANAGERS_OFF } from '../../utils/constants';
 
 const INPUT_ROOT_NAME = 'InputRoot';
@@ -19,7 +18,7 @@ export const inputVariants = tv({
     root: [
       // base
       'ring-stroke-soft',
-      'group relative flex w-full overflow-hidden bg-bg-white-0 text-text-strong shadow-xs',
+      'group relative flex w-full overflow-hidden bg-bg-white text-text-strong shadow-xs',
       'transition duration-200 ease-out',
       'divide-x divide-stroke-soft',
       // before
@@ -29,10 +28,12 @@ export const inputVariants = tv({
       // hover
       'hover:shadow-none',
       // focus
-      'has-[input:focus]:shadow-button-important-focus has-[input:focus]:before:ring-stroke-strong',
-      'focus-within:shadow-button-important-focus focus-within:before:ring-stroke-strong',
+      'has-[input:focus]:border-stroke-soft has-[input:focus]:ring-stroke-soft/50 has-[input:focus]:ring-[3px]',
+      'focus-within:border-stroke-soft focus-within:ring-stroke-soft/50 focus-within:ring-[3px]',
       // disabled
       'has-[input:disabled]:shadow-none',
+      // aria-invalid
+      'aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive',
     ],
     wrapper: [
       // base
@@ -102,7 +103,7 @@ export const inputVariants = tv({
       sm: {
         root: 'rounded-lg',
         wrapper: 'gap-2 px-2.5',
-        input: 'h-9 text-paragraph-xs',
+        input: 'h-[2.35rem] text-paragraph-xs',
         affix: 'text-paragraph-xs',
         inlineAffix: 'text-paragraph-xs',
       },
@@ -129,8 +130,8 @@ export const inputVariants = tv({
           // base
           'hover:before:ring-error-base hover:[&:not(&:has(input:focus)):has(>:only-child)]:before:ring-error-base',
           // focus
-          'has-[input:focus]:shadow-button-error-focus has-[input:focus]:before:ring-error-base',
-          'focus-within:shadow-button-error-focus focus-within:before:ring-error-base',
+          'has-[input:focus]:border-destructive has-[input:focus]:ring-destructive/20 dark:has-[input:focus]:ring-destructive/40',
+          'focus-within:border-destructive focus-within:ring-destructive/20 dark:focus-within:ring-destructive/40',
         ],
       },
       false: {
@@ -281,7 +282,7 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
   ) => {
     return (
       <InputRoot size={size} hasError={hasError}>
-        {leadingNode}
+        {leadingNode && <div className="flex flex-col justify-center gap-1">{leadingNode}</div>}
         <InputWrapper>
           {inlineLeadingNode}
           {LeadingIcon && <InputIcon as={LeadingIcon} />}
@@ -289,7 +290,7 @@ const Input = React.forwardRef<HTMLInputElement, InputProps>(
           {TrailingIcon && <InputIcon as={TrailingIcon} />}
           {inlineTrailingNode}
         </InputWrapper>
-        {trailingNode}
+        {trailingNode && <div className="flex flex-col justify-center gap-1">{trailingNode}</div>}
       </InputRoot>
     );
   }
@@ -360,7 +361,7 @@ export {
   InputInlineAffix as InlineAffix,
   Input,
   InputEl as InputPure,
-  InputRoot as InputRoot,
-  InputWrapper as InputWrapper,
+  InputRoot,
+  InputWrapper,
   type InputProps,
 };

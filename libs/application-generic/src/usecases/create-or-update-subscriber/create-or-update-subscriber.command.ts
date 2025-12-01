@@ -1,48 +1,62 @@
+import { SubscriberEntity } from '@novu/dal';
+import { ISubscriberChannel, SubscriberCustomData } from '@novu/shared';
+import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsEmail,
   IsLocale,
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsTimeZone,
+  ValidateIf,
 } from 'class-validator';
-import { Transform } from 'class-transformer';
-import { SubscriberEntity } from '@novu/dal';
-import { ISubscriberChannel, SubscriberCustomData } from '@novu/shared';
 
-import { EnvironmentCommand } from '../../commands/project.command';
+import { EnvironmentCommand } from '../../commands';
 
 export class CreateOrUpdateSubscriberCommand extends EnvironmentCommand {
   @IsString()
   @IsNotEmpty()
-  @Transform(({ value }) => value?.toString().trim())
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   subscriberId: string;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.email !== null)
   @IsEmail()
-  @IsOptional()
-  email?: string;
+  email?: string | null;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.firstName !== null)
   @IsString()
-  @IsOptional()
-  firstName?: string;
+  firstName?: string | null;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.lastName !== null)
   @IsString()
-  @IsOptional()
-  lastName?: string;
+  lastName?: string | null;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.phone !== null)
   @IsString()
-  @IsOptional()
-  phone?: string;
+  phone?: string | null;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.avatar !== null)
   @IsString()
-  @IsOptional()
-  avatar?: string;
+  avatar?: string | null;
 
+  @IsOptional()
+  @ValidateIf((obj) => obj.locale !== null)
   @IsLocale()
-  @IsOptional()
-  locale?: string;
+  locale?: string | null;
 
   @IsOptional()
-  data?: SubscriberCustomData;
+  data?: SubscriberCustomData | null;
+
+  @IsOptional()
+  @ValidateIf((obj) => obj.timezone !== null)
+  @IsTimeZone()
+  timezone?: string | null;
 
   /**
    * Represents existing entity that will be used for updating subscriber instead of creating one
@@ -53,4 +67,17 @@ export class CreateOrUpdateSubscriberCommand extends EnvironmentCommand {
 
   @IsOptional()
   channels?: ISubscriberChannel[];
+  /**
+   * Represents the name of the active worker that is processing the subscriber for debugging and logging
+   */
+  @IsOptional()
+  activeWorkerName?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  allowUpdate?: boolean = true;
+
+  @IsOptional()
+  @IsBoolean()
+  failIfExists?: boolean = false;
 }

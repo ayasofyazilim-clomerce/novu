@@ -1,10 +1,17 @@
-import { Badge } from '@/components/primitives/badge';
-import { Button } from '@/components/primitives/button';
-import { cn } from '@/utils/ui';
-import { IActivityJob, IDelayRegularMetadata, IDigestRegularMetadata, JobStatusEnum, StepTypeEnum } from '@novu/shared';
+import {
+  type IActivityJob,
+  type IDelayRegularMetadata,
+  type IDigestRegularMetadata,
+  IDigestTimedMetadata,
+  JobStatusEnum,
+  StepTypeEnum,
+} from '@novu/shared';
 import { format } from 'date-fns';
 import { ChevronDown, Info, Route } from 'lucide-react';
 import { useState } from 'react';
+import { Badge } from '@/components/primitives/badge';
+import { Button } from '@/components/primitives/button';
+import { cn } from '@/utils/ui';
 import { STEP_TYPE_TO_COLOR } from '../../utils/color';
 import { formatJSONString } from '../../utils/string';
 import { STEP_TYPE_TO_ICON } from '../icons/utils';
@@ -37,7 +44,7 @@ export function ActivityJobItem({ job, isFirst, isLast }: ActivityJobItemProps) 
 
       <JobStatusIndicator status={job.status} />
 
-      <Card className="border-1 flex-1 border border-neutral-200 p-1 shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)]">
+      <Card className="border-1 flex-1 overflow-hidden border border-neutral-200 p-1 shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)]">
         <CardHeader
           className="flex flex-row items-center justify-between bg-white p-2 px-1 hover:cursor-pointer"
           onClick={() => setIsExpanded(!isExpanded)}
@@ -69,8 +76,10 @@ export function ActivityJobItem({ job, isFirst, isLast }: ActivityJobItemProps) 
         {!isExpanded && (
           <CardContent className="rounded-lg bg-neutral-50 p-2">
             <div className="flex items-center justify-between">
-              <span className="text-foreground-400 max-w-[300px] truncate pr-2 text-xs">{getStatusMessage(job)}</span>
-              <Badge variant="lighter" color="gray" size="sm">
+              <TruncatedText className="text-foreground-400 max-w-[300px] pr-2 text-xs">
+                {getStatusMessage(job)}
+              </TruncatedText>
+              <Badge variant="lighter" color="gray" size="sm" className="whitespace-nowrap">
                 <TimeDisplayHoverCard date={new Date(job.updatedAt)}>
                   {format(new Date(job.updatedAt), 'MMM d yyyy, HH:mm:ss')}
                 </TimeDisplayHoverCard>
@@ -98,58 +107,108 @@ function getStatusMessage(job: IActivityJob): string | React.ReactNode {
     return 'Job is pending';
   }
 
-  if (job.status === JobStatusEnum.FAILED && job.executionDetails?.length > 0) {
+  if (job.status === JobStatusEnum.SKIPPED) {
+    return 'Step was skipped';
+  }
+
+  if (
+    (job.status === JobStatusEnum.FAILED || job.status === JobStatusEnum.CANCELED) &&
+    job.executionDetails?.length > 0
+  ) {
     const lastExecutionDetail = job.executionDetails[job.executionDetails.length - 1];
 
     return lastExecutionDetail ? (
       <div className="flex items-center gap-2">
         {lastExecutionDetail.raw ? (
-          <ErrorTooltip message={lastExecutionDetail.detail} raw={lastExecutionDetail.raw} />
+          <TraceTooltip message={lastExecutionDetail.detail} raw={lastExecutionDetail.raw} variant="info" />
         ) : (
-          <span className="text-destructive">
+          <span className={job.status === JobStatusEnum.FAILED ? 'text-destructive' : 'text-text-soft'}>
             <TruncatedText>{lastExecutionDetail.detail}</TruncatedText>
           </span>
         )}
       </div>
-    ) : (
+    ) : job.status === JobStatusEnum.FAILED ? (
       'Step execution failed'
+    ) : (
+      'Step was skipped'
     );
   }
 
   switch (job.type?.toLowerCase()) {
-    case StepTypeEnum.DIGEST:
+    case StepTypeEnum.TRIGGER:
       if (job.status === JobStatusEnum.COMPLETED) {
-        return `Digested ${job.digest?.events?.length ?? 0} events for ${(job.digest as IDigestRegularMetadata)?.amount ?? 0} ${
-          (job.digest as IDigestRegularMetadata)?.unit ?? ''
-        }`;
-      }
-
-      if (job.status === JobStatusEnum.DELAYED) {
-        return `Collecting Digest events for ${(job.digest as IDigestRegularMetadata)?.amount ?? 0} ${
-          (job.digest as IDigestRegularMetadata)?.unit ?? ''
-        }`;
+        return 'Step completed';
       }
 
       return '';
-    case StepTypeEnum.DELAY:
+
+    case StepTypeEnum.THROTTLE:
       if (job.status === JobStatusEnum.COMPLETED) {
+        return 'Throttle step completed';
+      }
+
+      return '';
+    case StepTypeEnum.DIGEST:
+      if (job.status === JobStatusEnum.COMPLETED) {
+        if ((job.digest as IDigestTimedMetadata).timed?.untilDate) {
+          return `Digested events until scheduled time${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+        }
+
+        return `Digested ${job.digest?.events?.length ?? 0} events for ${(job.digest as IDigestRegularMetadata)?.amount ?? 0} ${
+          (job.digest as IDigestRegularMetadata)?.unit ?? ''
+        }${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+      }
+
+      if (job.status === JobStatusEnum.DELAYED) {
+        const untilDate = (job.digest as IDigestTimedMetadata).timed?.untilDate;
+        if (untilDate) {
+          const untilDateFormatted = format(new Date(untilDate), 'MMM d yyyy, HH:mm:ss');
+          return `Collecting events until ${untilDateFormatted}${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+        }
+
+        return job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0
+          ? 'Extended to subscriber schedule'
+          : `Collecting Digest events for ${(job.digest as IDigestRegularMetadata)?.amount ?? 0} ${
+              (job.digest as IDigestRegularMetadata)?.unit ?? ''
+            }`;
+      }
+
+      return '';
+    case StepTypeEnum.DELAY: {
+      const { unit, amount } = (job.digest || {}) as IDelayRegularMetadata;
+
+      if (job.status === JobStatusEnum.COMPLETED) {
+        if ((job.digest as IDigestTimedMetadata)?.timed?.untilDate) {
+          return `Delayed until scheduled time${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+        }
+        if (unit && amount) {
+          return `Delayed for ${amount} ${unit}${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+        }
+
         return 'Delay completed';
       }
 
       if (job.status === JobStatusEnum.DELAYED) {
-        // TODO: Ensure that the API populates the delay unit and amount for all occasions
-        const { unit, amount } = (job.digest || {}) as IDelayRegularMetadata;
         let msg = 'Waiting';
 
+        const untilDate = (job.digest as IDigestTimedMetadata)?.timed?.untilDate;
+        if (untilDate) {
+          const untilDateFormatted = format(new Date(untilDate), 'MMM d yyyy, HH:mm:ss');
+          return `Waiting until ${untilDateFormatted}${job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0 ? `, extended to subscriber schedule` : ''}`;
+        }
+
         if (unit && amount) {
-          msg = `Waiting for ${amount} ${unit}`;
+          msg =
+            job.scheduleExtensionsCount && job.scheduleExtensionsCount > 0
+              ? 'Extended to subscriber schedule'
+              : `Waiting for ${amount} ${unit}`;
         }
 
         return msg;
       }
 
       return '';
-
+    }
     default:
       if (job.status === JobStatusEnum.COMPLETED) {
         return 'Message sent successfully';
@@ -159,13 +218,15 @@ function getStatusMessage(job: IActivityJob): string | React.ReactNode {
   }
 }
 
-function ErrorTooltip({ message, raw }: { message: string; raw: any }) {
+function TraceTooltip({ message, raw, variant = 'error' }: { message: string; raw: any; variant?: 'error' | 'info' }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <button type="button" className="flex items-center gap-1 text-left hover:cursor-default">
-          <span className="text-destructive">{message}</span>
-          <Info className="text-destructive h-3 w-3 shrink-0" />
+          <span className={cn('text-destructive', variant === 'error' ? 'text-destructive' : 'text-text-soft')}>
+            {message}
+          </span>
+          <Info className={cn('h-3 w-3 shrink-0', variant === 'error' ? 'text-destructive' : 'text-text-soft')} />
         </button>
       </TooltipTrigger>
       <TooltipContent side="right" className="max-w-[400px] border border-neutral-200 bg-white p-3 shadow-lg">
@@ -183,18 +244,18 @@ function getJobIcon(type?: StepTypeEnum) {
   return <Icon className="h-3.5 w-3.5" />;
 }
 
-function getJobColor(status: JobStatusEnum) {
+function getJobClasses(status: JobStatusEnum) {
   switch (status) {
     case JobStatusEnum.COMPLETED:
-      return 'success';
+      return 'text-success';
     case JobStatusEnum.FAILED:
-      return 'destructive';
+      return 'text-destructive';
     case JobStatusEnum.DELAYED:
-      return 'warning';
+      return 'text-warning';
     case JobStatusEnum.MERGED:
-      return 'neutral-300';
+      return 'text-neutral-300';
     default:
-      return 'neutral-300';
+      return 'text-neutral-300';
   }
 }
 
@@ -205,7 +266,10 @@ function JobDetails({ job }: { job: IActivityJob }) {
         {job.executionDetails && job.executionDetails.length > 0 && (
           <div className="flex flex-col gap-2">
             {job.executionDetails.map((detail, index) => (
-              <ExecutionDetailItem key={index} detail={detail} />
+              <ExecutionDetailItem
+                key={index}
+                detail={{ ...detail, status: job.executionDetails[job.executionDetails.length - 1].status }}
+              />
             ))}
           </div>
         )}
@@ -243,7 +307,7 @@ function JobStatusIndicator({ status }: JobStatusIndicatorProps) {
   return (
     <div className="relative flex-shrink-0">
       <div className="flex h-6 w-6 items-center justify-center rounded-full bg-white shadow-[0px_1px_2px_0px_rgba(10,13,20,0.03)]">
-        <div className={`text-${getJobColor(status)} flex items-center justify-center`}>
+        <div className={`${getJobClasses(status)} flex items-center justify-center`}>
           <Icon className={cn('h-4 w-4', animationClass)} />
         </div>
       </div>

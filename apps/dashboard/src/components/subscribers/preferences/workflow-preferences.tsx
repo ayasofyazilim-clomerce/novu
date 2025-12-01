@@ -1,16 +1,18 @@
-import { STEP_TYPE_TO_ICON } from '@/components/icons/utils';
-import { Card, CardContent, CardHeader } from '@/components/primitives/card';
-import { Step } from '@/components/primitives/step';
-import { PreferencesItem } from '@/components/subscribers/preferences/preferences-item';
-import { PatchPreferenceChannelsDto, WorkflowPreferenceDto } from '@novu/api/models/components';
+import { PatchPreferenceChannelsDto, SubscriberWorkflowPreferenceDto } from '@novu/api/models/components';
 import { ChannelTypeEnum } from '@novu/shared';
 import { motion } from 'motion/react';
 import { useState } from 'react';
 import { RiContractUpDownLine, RiExpandUpDownLine } from 'react-icons/ri';
+import { STEP_TYPE_TO_ICON } from '@/components/icons/utils';
+import { Card, CardContent, CardFooter, CardHeader } from '@/components/primitives/card';
+import { Step } from '@/components/primitives/step';
+import { PreferencesItem } from '@/components/subscribers/preferences/preferences-item';
+import { formatDateSimple } from '@/utils/format-date';
+import { cn } from '@/utils/ui';
 import { STEP_TYPE_TO_COLOR } from '../../../utils/color';
 
 type WorkflowPreferencesProps = {
-  workflowPreferences: WorkflowPreferenceDto;
+  workflowPreferences: SubscriberWorkflowPreferenceDto;
   onToggle: (channels: PatchPreferenceChannelsDto, workflowId: string) => void;
   readOnly?: boolean;
 };
@@ -20,9 +22,11 @@ export function WorkflowPreferences(props: WorkflowPreferencesProps) {
   const [isExpanded, setIsExpanded] = useState(false);
   const { workflow, channels } = workflowPreferences;
   return (
-    <Card className="border-1 rounded-lg border border-neutral-100 p-1 shadow-none">
+    <Card className="border-1 rounded-lg border border-neutral-100 bg-neutral-50 p-1 shadow-none">
       <CardHeader
-        className="flex w-full flex-row items-center justify-between bg-white p-1 hover:cursor-pointer"
+        className={cn('flex w-full flex-row items-center justify-between p-1 hover:cursor-pointer', {
+          'pb-2': isExpanded,
+        })}
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <span className="text-foreground-600 text-xs">{workflow.name}</span>
@@ -36,7 +40,6 @@ export function WorkflowPreferences(props: WorkflowPreferencesProps) {
           )}
         </div>
       </CardHeader>
-
       <motion.div
         initial={{
           height: 0,
@@ -52,9 +55,10 @@ export function WorkflowPreferences(props: WorkflowPreferencesProps) {
         }}
         className="overflow-hidden"
       >
-        <CardContent className="rounded-lg bg-neutral-50 p-2">
+        <CardContent className="space-y-2 rounded-lg bg-white p-2">
           {Object.entries(channels).map(([channel, enabled]) => (
             <PreferencesItem
+              key={channel}
               channel={channel as ChannelTypeEnum}
               enabled={enabled}
               onChange={(checked: boolean) => onToggle({ [channel]: checked }, workflow.slug)}
@@ -62,6 +66,23 @@ export function WorkflowPreferences(props: WorkflowPreferencesProps) {
             />
           ))}
         </CardContent>
+        <CardFooter className="p-1 pb-0">
+          {workflow.updatedAt && (
+            <span className="text-2xs py-1 text-neutral-400">
+              Updated at{' '}
+              {formatDateSimple(workflow.updatedAt, {
+                month: 'short',
+                day: '2-digit',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+                timeZone: 'UTC',
+              })}{' '}
+              UTC
+            </span>
+          )}
+        </CardFooter>
       </motion.div>
     </Card>
   );

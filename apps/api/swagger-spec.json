@@ -29306,7 +29306,7 @@
       "name": "Integrations",
       "description": "With the help of the Integration Store, you can easily integrate your favorite delivery provider. During the runtime of the API, the Integrations Store is responsible for storing the configurations of all the providers.",
       "externalDocs": {
-        "url": "https://docs.novu.co/channels-and-providers/integration-store"
+        "url": "https://docs.novu.co/platform/integrations/overview"
       }
     },
     {
@@ -29402,7 +29402,7 @@
         "type": "apiKey",
         "name": "Authorization",
         "in": "header",
-        "description": "API key authentication. Allowed headers-- \"Authorization: ApiKey <api_key>\"."
+        "description": "API key authentication. Allowed headers-- \"Authorization: ApiKey <novu_secret_key>\"."
       },
       "bearerAuth": {
         "type": "http",

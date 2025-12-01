@@ -10,22 +10,37 @@ import { ClientSDK, RequestOptions } from "../lib/sdks.js";
 import * as components from "../models/components/index.js";
 import * as operations from "../models/operations/index.js";
 import { unwrapAsync } from "../types/fp.js";
+import { Activity } from "./activity.js";
+import { Contexts } from "./contexts.js";
+import { Environments } from "./environments.js";
 import { Integrations } from "./integrations.js";
+import { Layouts } from "./layouts.js";
 import { Messages } from "./messages.js";
 import { Notifications } from "./notifications.js";
 import { Subscribers } from "./subscribers.js";
 import { Topics } from "./topics.js";
+import { Translations } from "./translations.js";
 import { Workflows } from "./workflows.js";
 
 export class Novu extends ClientSDK {
-  private _notifications?: Notifications;
-  get notifications(): Notifications {
-    return (this._notifications ??= new Notifications(this._options));
+  private _contexts?: Contexts;
+  get contexts(): Contexts {
+    return (this._contexts ??= new Contexts(this._options));
   }
 
-  private _integrations?: Integrations;
-  get integrations(): Integrations {
-    return (this._integrations ??= new Integrations(this._options));
+  private _environments?: Environments;
+  get environments(): Environments {
+    return (this._environments ??= new Environments(this._options));
+  }
+
+  private _activity?: Activity;
+  get activity(): Activity {
+    return (this._activity ??= new Activity(this._options));
+  }
+
+  private _layouts?: Layouts;
+  get layouts(): Layouts {
+    return (this._layouts ??= new Layouts(this._options));
   }
 
   private _subscribers?: Subscribers;
@@ -33,14 +48,14 @@ export class Novu extends ClientSDK {
     return (this._subscribers ??= new Subscribers(this._options));
   }
 
-  private _messages?: Messages;
-  get messages(): Messages {
-    return (this._messages ??= new Messages(this._options));
-  }
-
   private _topics?: Topics;
   get topics(): Topics {
     return (this._topics ??= new Topics(this._options));
+  }
+
+  private _translations?: Translations;
+  get translations(): Translations {
+    return (this._translations ??= new Translations(this._options));
   }
 
   private _workflows?: Workflows;
@@ -48,14 +63,28 @@ export class Novu extends ClientSDK {
     return (this._workflows ??= new Workflows(this._options));
   }
 
+  private _integrations?: Integrations;
+  get integrations(): Integrations {
+    return (this._integrations ??= new Integrations(this._options));
+  }
+
+  private _messages?: Messages;
+  get messages(): Messages {
+    return (this._messages ??= new Messages(this._options));
+  }
+
+  private _notifications?: Notifications;
+  get notifications(): Notifications {
+    return (this._notifications ??= new Notifications(this._options));
+  }
+
   /**
    * Trigger event
    *
    * @remarks
    *
-   *     Trigger event is the main (and only) way to send notifications to subscribers.
-   *     The trigger identifier is used to match the particular workflow associated with it.
-   *     Additional information can be passed according the body interface below.
+   *     Trigger event is the main (and only) way to send notifications to subscribers. The trigger identifier is used to match the particular workflow associated with it. Additional information can be passed according the body interface below.
+   *     To prevent duplicate triggers, you can optionally pass a **transactionId** in the request body. If the same **transactionId** is used again, the trigger will be ignored. The retention period depends on your billing tier.
    */
   async trigger(
     triggerEventRequestDto: components.TriggerEventRequestDto,
@@ -71,21 +100,21 @@ export class Novu extends ClientSDK {
   }
 
   /**
-   * Bulk trigger event
+   * Cancel triggered event
    *
    * @remarks
    *
-   *       Using this endpoint you can trigger multiple events at once, to avoid multiple calls to the API.
-   *       The bulk API is limited to 100 events per request.
+   *     Using a previously generated transactionId during the event trigger,
+   *      will cancel any active or pending workflows. This is useful to cancel active digests, delays etc...
    */
-  async triggerBulk(
-    bulkTriggerEventDto: components.BulkTriggerEventDto,
+  async cancel(
+    transactionId: string,
     idempotencyKey?: string | undefined,
     options?: RequestOptions,
-  ): Promise<operations.EventsControllerTriggerBulkResponse> {
-    return unwrapAsync(triggerBulk(
+  ): Promise<operations.EventsControllerCancelResponse> {
+    return unwrapAsync(cancel(
       this,
-      bulkTriggerEventDto,
+      transactionId,
       idempotencyKey,
       options,
     ));
@@ -112,21 +141,21 @@ export class Novu extends ClientSDK {
   }
 
   /**
-   * Cancel triggered event
+   * Bulk trigger event
    *
    * @remarks
    *
-   *     Using a previously generated transactionId during the event trigger,
-   *      will cancel any active or pending workflows. This is useful to cancel active digests, delays etc...
+   *       Using this endpoint you can trigger multiple events at once, to avoid multiple calls to the API.
+   *       The bulk API is limited to 100 events per request.
    */
-  async cancel(
-    transactionId: string,
+  async triggerBulk(
+    bulkTriggerEventDto: components.BulkTriggerEventDto,
     idempotencyKey?: string | undefined,
     options?: RequestOptions,
-  ): Promise<operations.EventsControllerCancelResponse> {
-    return unwrapAsync(cancel(
+  ): Promise<operations.EventsControllerTriggerBulkResponse> {
+    return unwrapAsync(triggerBulk(
       this,
-      transactionId,
+      bulkTriggerEventDto,
       idempotencyKey,
       options,
     ));

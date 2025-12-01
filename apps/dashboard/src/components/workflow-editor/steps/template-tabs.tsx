@@ -29,7 +29,6 @@ export const TemplateTabs = ({
     if (tabsValue === 'preview') {
       previewStep?.();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tabsValue]);
 
   return (
@@ -59,6 +58,7 @@ export const TemplateTabs = ({
             e.stopPropagation();
             navigate('../', { relative: 'path' });
           }}
+          data-testid="tabs-close-button"
         >
           <span className="sr-only">Close</span>
         </CompactButton>

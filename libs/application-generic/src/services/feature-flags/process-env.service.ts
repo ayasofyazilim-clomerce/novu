@@ -14,6 +14,9 @@ export class ProcessEnvFeatureFlagsService implements IFeatureFlagsService {
 
   async getFlag<T_Result>(context: FeatureFlagContext<T_Result>): Promise<T_Result> {
     const processEnvValue = process.env[context.key];
+    if (!processEnvValue) {
+      return context.defaultValue as T_Result;
+    }
 
     if (typeof context.defaultValue === 'number') {
       return Number(processEnvValue) as T_Result;
@@ -23,6 +26,10 @@ export class ProcessEnvFeatureFlagsService implements IFeatureFlagsService {
       return (processEnvValue === 'true') as T_Result;
     }
 
-    return (processEnvValue || context.defaultValue) as T_Result;
+    if (typeof context.defaultValue === 'string') {
+      return processEnvValue as T_Result;
+    }
+
+    return context.defaultValue as T_Result;
   }
 }

@@ -1,6 +1,4 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
-
-import { ObservabilityBackgroundTransactionEnum } from '@novu/shared';
 import {
   BullMqService,
   getStandardWorkerOptions,
@@ -8,23 +6,21 @@ import {
   Job,
   PinoLogger,
   StandardWorkerService,
-  storage,
   Store,
+  storage,
   WorkerOptions,
   WorkflowInMemoryProviderService,
 } from '@novu/application-generic';
-
-import { CommunityOrganizationRepository, CommunityUserRepository } from '@novu/dal';
+import { CommunityOrganizationRepository, JobRepository } from '@novu/dal';
+import { JobStatusEnum, ObservabilityBackgroundTransactionEnum } from '@novu/shared';
 import {
+  HandleLastFailedJob,
+  HandleLastFailedJobCommand,
   RunJob,
   RunJobCommand,
-  SetJobAsCommand,
-  SetJobAsCompleted,
   SetJobAsFailed,
   SetJobAsFailedCommand,
   WebhookFilterBackoffStrategy,
-  HandleLastFailedJobCommand,
-  HandleLastFailedJob,
 } from '../usecases';
 
 const nr = require('newrelic');
@@ -36,13 +32,13 @@ export class StandardWorker extends StandardWorkerService {
   constructor(
     private handleLastFailedJob: HandleLastFailedJob,
     private runJob: RunJob,
-    @Inject(forwardRef(() => SetJobAsCompleted)) private setJobAsCompleted: SetJobAsCompleted,
     @Inject(forwardRef(() => SetJobAsFailed)) private setJobAsFailed: SetJobAsFailed,
     @Inject(forwardRef(() => WebhookFilterBackoffStrategy))
     private webhookFilterBackoffStrategy: WebhookFilterBackoffStrategy,
     @Inject(forwardRef(() => WorkflowInMemoryProviderService))
     public workflowInMemoryProviderService: WorkflowInMemoryProviderService,
-    private organizationRepository: CommunityOrganizationRepository
+    private organizationRepository: CommunityOrganizationRepository,
+    private jobRepository: JobRepository
   ) {
     super(new BullMqService(workflowInMemoryProviderService));
 
@@ -50,6 +46,10 @@ export class StandardWorker extends StandardWorkerService {
 
     this.worker.on('failed', async (job: Job<IStandardDataDto, void, string>, error: Error): Promise<void> => {
       await this.jobHasFailed(job, error);
+    });
+
+    this.worker.on('completed', async (job: Job<IStandardDataDto, void, string>): Promise<void> => {
+      await this.jobHasCompleted(job);
     });
   }
 
@@ -99,7 +99,7 @@ export class StandardWorker extends StandardWorkerService {
       const organizationExists = await this.organizationExist(data);
 
       if (!organizationExists) {
-        Logger.log(
+        Logger.verbose(
           `Organization not found for organizationId ${minimalJobData.organizationId}. Skipping job.`,
           LOG_CONTEXT
         );
@@ -147,15 +147,22 @@ export class StandardWorker extends StandardWorkerService {
     try {
       const minimalData = this.extractMinimalJobData(job.data);
       jobId = minimalData.jobId;
-      const { environmentId } = minimalData;
-      const { userId } = minimalData;
 
-      await this.setJobAsCompleted.execute(
-        SetJobAsCommand.create({
-          environmentId,
-          jobId,
-          userId,
-        })
+      /*
+       * The job might have been cancelled in the pipeline (e.g., by a digest or delay step)
+       * In such cases, we only update jobs that are in RUNNING status to COMPLETED, preserving other final statuses
+       */
+      await this.jobRepository.updateOne(
+        {
+          _environmentId: minimalData.environmentId,
+          _id: minimalData.jobId,
+          status: JobStatusEnum.RUNNING,
+        },
+        {
+          $set: {
+            status: JobStatusEnum.COMPLETED,
+          },
+        }
       );
     } catch (error) {
       Logger.error(error, `Failed to set job ${jobId} as completed`, LOG_CONTEXT);
@@ -177,7 +184,26 @@ export class StandardWorker extends StandardWorkerService {
 
       const shouldBeSetAsFailed = !hasToBackoff || shouldHandleLastFailedJob;
       if (shouldBeSetAsFailed) {
-        await this.setJobAsFailed.execute(SetJobAsFailedCommand.create(minimalData), error);
+        let isLastJobInWorkflow = false;
+
+        const jobEntity = await this.jobRepository.findOne({
+          _id: minimalData.jobId,
+          _environmentId: minimalData.environmentId,
+        });
+
+        if (jobEntity) {
+          const hasNextJob = await this.jobRepository.findOne({
+            _environmentId: minimalData.environmentId,
+            _parentId: minimalData.jobId,
+          });
+
+          const shouldHaltOnFailure =
+            jobEntity.step?.shouldStopOnFail === undefined ? true : jobEntity.step.shouldStopOnFail;
+
+          isLastJobInWorkflow = !hasNextJob || shouldHaltOnFailure;
+        }
+
+        await this.setJobAsFailed.execute(SetJobAsFailedCommand.create({ ...minimalData, isLastJobInWorkflow }), error);
       }
 
       if (shouldHandleLastFailedJob) {

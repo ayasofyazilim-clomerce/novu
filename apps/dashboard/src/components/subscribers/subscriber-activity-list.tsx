@@ -1,4 +1,4 @@
-import { IActivity, JobStatusEnum, WorkflowOriginEnum } from '@novu/shared';
+import { IActivity, JobStatusEnum, ResourceOriginEnum } from '@novu/shared';
 import { motion } from 'motion/react';
 import { FaCode } from 'react-icons/fa6';
 
@@ -11,7 +11,7 @@ import { StatusBadge, StatusBadgeIcon } from '@/components/primitives/status-bad
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/primitives/tooltip';
 import { TimeDisplayHoverCard } from '@/components/time-display-hover-card';
 import TruncatedText from '@/components/truncated-text';
-import { itemVariants, listVariants } from '@/motion/variants';
+import { itemVariants, listVariants } from '@/utils/animation';
 import { formatDateSimple } from '@/utils/format-date';
 import { cn } from '@/utils/ui';
 
@@ -48,7 +48,6 @@ export const SubscriberActivityList = ({
         <ActivityEmptyState
           emptySearchResults={hasChangesInFilters}
           onClearFilters={onClearFilters}
-          emptyFiltersTitle="No activity in the past 30 days"
           emptyFiltersDescription="This subscriber hasn't received any notifications yet. Once a workflow is triggered for them, you'll see their notification history and delivery details here."
         />
       </motion.div>
@@ -117,7 +116,7 @@ export const SubscriberActivityList = ({
             }}
           >
             <div className={cn('flex max-w-96 items-center gap-2 px-3 py-2', { 'opacity-50': !activity.template })}>
-              {activity.template?.origin === WorkflowOriginEnum.EXTERNAL ? (
+              {activity.template?.origin === ResourceOriginEnum.EXTERNAL ? (
                 <FaCode className="size-3.5 min-w-3.5" />
               ) : (
                 <RouteFill className={cn('text-feature size-3.5 min-w-3.5')} />

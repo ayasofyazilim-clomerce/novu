@@ -1,25 +1,62 @@
 import { forwardRef, Inject, Injectable, Logger } from '@nestjs/common';
-import { JobEntity, JobRepository, JobStatusEnum, NotificationRepository } from '@novu/dal';
-import { StepTypeEnum } from '@novu/shared';
-import { setUser } from '@sentry/node';
 import {
+  CreateExecutionDetails,
+  CreateExecutionDetailsCommand,
+  DetailEnum,
+  FeatureFlagsService,
+  GetSubscriberSchedule,
+  GetSubscriberScheduleCommand,
   getJobDigest,
   Instrument,
   InstrumentUsecase,
   PinoLogger,
+  StepRunRepository,
   StorageHelperService,
+  WorkflowRunService,
+  WorkflowRunStatusEnum,
 } from '@novu/application-generic';
-
-import { RunJobCommand } from './run-job.command';
-import { SendMessage, SendMessageCommand } from '../send-message';
-import { PlatformException, EXCEPTION_MESSAGE_ON_WEBHOOK_FILTER, shouldHaltOnStepFailure } from '../../../shared/utils';
-import { SetJobAsFailed } from '../update-job-status/set-job-as-failed.usecase';
+import {
+  JobEntity,
+  JobRepository,
+  JobStatusEnum,
+  NotificationEntity,
+  NotificationRepository,
+  NotificationTemplateEntity,
+  NotificationTemplateRepository,
+  SubscriberRepository,
+} from '@novu/dal';
+import {
+  ExecutionDetailsSourceEnum,
+  ExecutionDetailsStatusEnum,
+  FeatureFlagsKeysEnum,
+  Schedule,
+  StepTypeEnum,
+} from '@novu/shared';
+import { setUser } from '@sentry/node';
+import { differenceInMilliseconds } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
+import { EXCEPTION_MESSAGE_ON_WEBHOOK_FILTER, PlatformException, shouldHaltOnStepFailure } from '../../../shared/utils';
 import { AddJob } from '../add-job';
+import { ExecuteBridgeJob, ExecuteBridgeJobCommand } from '../execute-bridge-job';
+import { ProcessUnsnoozeJob, ProcessUnsnoozeJobCommand } from '../process-unsnooze-job';
+import { SendMessage, SendMessageCommand } from '../send-message';
+import { SendMessageStatus } from '../send-message/send-message-type.usecase';
 import { SetJobAsFailedCommand } from '../update-job-status/set-job-as.command';
+import { SetJobAsFailed } from '../update-job-status/set-job-as-failed.usecase';
+import { RunJobCommand } from './run-job.command';
+import { calculateNextAvailableTime, isWithinSchedule } from './schedule-validator';
 
 const nr = require('newrelic');
 
-const LOG_CONTEXT = 'RunJob';
+export type SelectedWorkflowFields = Pick<NotificationTemplateEntity, 'steps'>;
+
+/**
+ * MongoDB projection object for SelectedWorkflowFields.
+ * This ensures the projection is always aligned with the type definition.
+ */
+export const SELECTED_WORKFLOW_FIELDS_PROJECTION: Record<keyof SelectedWorkflowFields, 1> = {
+  steps: 1,
+} as const;
 
 @Injectable()
 export class RunJob {
@@ -30,8 +67,19 @@ export class RunJob {
     @Inject(forwardRef(() => SetJobAsFailed)) private setJobAsFailed: SetJobAsFailed,
     private storageHelperService: StorageHelperService,
     private notificationRepository: NotificationRepository,
-    private logger?: PinoLogger
-  ) {}
+    private notificationTemplateRepository: NotificationTemplateRepository,
+    private processUnsnoozeJob: ProcessUnsnoozeJob,
+    private stepRunRepository: StepRunRepository,
+    private workflowRunService: WorkflowRunService,
+    private createExecutionDetails: CreateExecutionDetails,
+    private getSubscriberSchedule: GetSubscriberSchedule,
+    private logger: PinoLogger,
+    private subscriberRepository: SubscriberRepository,
+    private featureFlagsService: FeatureFlagsService,
+    private executeBridgeJob: ExecuteBridgeJob
+  ) {
+    this.logger.setContext(this.constructor.name);
+  }
 
   @InstrumentUsecase()
   public async execute(command: RunJobCommand): Promise<JobEntity | undefined> {
@@ -46,12 +94,22 @@ export class RunJob {
       throw new PlatformException(`Job with id ${command.jobId} not found`);
     }
 
+    await this.stepRunRepository.create(job, {
+      status: JobStatusEnum.RUNNING,
+    });
+
     this.assignLogger(job);
 
     const { canceled, activeDigestFollower } = await this.delayedEventIsCanceled(job);
 
     if (canceled && !activeDigestFollower) {
-      Logger.verbose({ canceled }, `Job ${job._id} that had been delayed has been cancelled`, LOG_CONTEXT);
+      this.logger.trace({ nv: { canceled } }, `Job ${job._id} that had been delayed has been cancelled`);
+      await this.stepRunRepository.create(job, {
+        status: JobStatusEnum.CANCELED,
+      });
+
+      // Update workflow run delivery lifecycle after job cancellation
+      await this.conditionallyUpdateDeliveryLifecycle(job, WorkflowRunStatusEnum.COMPLETED);
 
       return;
     }
@@ -70,19 +128,125 @@ export class RunJob {
     });
 
     let shouldQueueNextJob = true;
+    let isJobExtendedToSubscriberSchedule = false;
+    let error: Error | undefined;
 
     try {
+      const isSubscribersScheduleEnabled = await this.featureFlagsService.getFlag({
+        key: FeatureFlagsKeysEnum.IS_SUBSCRIBERS_SCHEDULE_ENABLED,
+        defaultValue: false,
+        organization: { _id: job._organizationId },
+        environment: { _id: job._environmentId },
+      });
+
+      const notification: Pick<NotificationEntity, '_id' | 'critical' | 'severity' | 'tags'> | null =
+        await this.notificationRepository.findOne(
+          {
+            _id: job._notificationId,
+            _environmentId: job._environmentId,
+          },
+          '_id critical tags severity'
+        );
+
+      if (!notification) {
+        throw new PlatformException(`Notification with id ${job._notificationId} not found`);
+      }
+
+      if (isSubscribersScheduleEnabled) {
+        const schedule = await this.getSubscriberSchedule.execute(
+          GetSubscriberScheduleCommand.create({
+            environmentId: job._environmentId,
+            organizationId: job._organizationId,
+            _subscriberId: job._subscriberId,
+          })
+        );
+
+        const subscriber = await this.subscriberRepository.findOne(
+          {
+            _id: job._subscriberId,
+            _environmentId: job._environmentId,
+            _organizationId: job._organizationId,
+          },
+          'timezone',
+          { readPreference: 'secondaryPreferred' }
+        );
+        const timezone = subscriber?.timezone;
+        const isOutsideSubscriberSchedule = schedule?.isEnabled
+          ? !isWithinSchedule(schedule, new Date(), timezone)
+          : false;
+
+        if (
+          isOutsideSubscriberSchedule &&
+          (await this.shouldExtendToSubscriberSchedule(job, notification.critical ?? false))
+        ) {
+          this.logger.info(
+            {
+              jobId: job._id,
+              subscriberId: job.subscriberId,
+              stepType: job.type,
+            },
+            "The step was extended to the next available time in the subscriber's schedule"
+          );
+
+          isJobExtendedToSubscriberSchedule = await this.extendJobToNextAvailableSchedule(job, schedule, timezone);
+          if (isJobExtendedToSubscriberSchedule) {
+            shouldQueueNextJob = false;
+            return;
+          }
+        }
+
+        if (isOutsideSubscriberSchedule && !this.shouldSkipScheduleCheck(job, notification.critical)) {
+          this.logger.info(
+            {
+              jobId: job._id,
+              subscriberId: job.subscriberId,
+              stepType: job.type,
+            },
+            "The step was skipped as it fell outside the subscriber's schedule"
+          );
+
+          await this.jobRepository.updateStatus(job._environmentId, job._id, JobStatusEnum.CANCELED);
+
+          await this.stepRunRepository.create(job, {
+            status: JobStatusEnum.CANCELED,
+          });
+
+          await this.createExecutionDetails.execute(
+            CreateExecutionDetailsCommand.create({
+              ...CreateExecutionDetailsCommand.getDetailsFromJob(job),
+              detail: DetailEnum.SKIPPED_STEP_OUTSIDE_OF_THE_SCHEDULE,
+              source: ExecutionDetailsSourceEnum.INTERNAL,
+              status: ExecutionDetailsStatusEnum.SUCCESS,
+              isTest: false,
+              isRetry: false,
+              raw: JSON.stringify({
+                schedule,
+                timezone,
+              }),
+            })
+          );
+
+          // Update workflow run delivery lifecycle after schedule-based cancellation
+          await this.conditionallyUpdateDeliveryLifecycle(job, WorkflowRunStatusEnum.COMPLETED);
+
+          return;
+        }
+      }
+
       await this.jobRepository.updateStatus(job._environmentId, job._id, JobStatusEnum.RUNNING);
 
       await this.storageHelperService.getAttachments(job.payload?.attachments);
 
-      const notification = await this.notificationRepository.findOne({
-        _id: job._notificationId,
-        _environmentId: job._environmentId,
-      });
+      if (this.isUnsnoozeJob(job)) {
+        await this.processUnsnoozeJob.execute(
+          ProcessUnsnoozeJobCommand.create({
+            jobId: job._id,
+            environmentId: job._environmentId,
+            organizationId: job._organizationId,
+          })
+        );
 
-      if (!notification) {
-        throw new PlatformException(`Notification with id ${job._notificationId} not found`);
+        return;
       }
 
       const sendMessageResult = await this.sendMessage.execute(
@@ -104,14 +268,78 @@ export class RunJob {
           events: job.digest?.events,
           job,
           tags: notification.tags || [],
+          severity: notification.severity,
           statelessPreferences: job.preferences,
+          contextKeys: job.contextKeys,
         })
       );
 
+      // while we sending a message the job can me updated, like in digest case, therefore we want to have the most updated job
+      job = sendMessageResult.job ?? job;
+
       if (sendMessageResult.status === 'success') {
         await this.jobRepository.updateStatus(job._environmentId, job._id, JobStatusEnum.COMPLETED);
+
+        await this.stepRunRepository.create(job, {
+          status: JobStatusEnum.COMPLETED,
+        });
+
+        // Update workflow run delivery lifecycle after successful step completion
+        await this.conditionallyUpdateDeliveryLifecycle(job, WorkflowRunStatusEnum.PROCESSING);
+      } else if (sendMessageResult.status === 'failed') {
+        await this.jobRepository.update(
+          {
+            _environmentId: job._environmentId,
+            _id: job._id,
+          },
+          {
+            $set: {
+              status: JobStatusEnum.FAILED,
+              error: sendMessageResult.errorMessage,
+            },
+          }
+        );
+
+        await this.stepRunRepository.create(job, {
+          status: JobStatusEnum.FAILED,
+          errorCode: 'send_message_failed',
+          errorMessage: sendMessageResult.errorMessage,
+        });
+
+        // Update workflow run delivery lifecycle after step failure
+        await this.conditionallyUpdateDeliveryLifecycle(job, WorkflowRunStatusEnum.COMPLETED);
+
+        if (shouldHaltOnStepFailure(job)) {
+          shouldQueueNextJob = false;
+          await this.jobRepository.cancelPendingJobs({
+            transactionId: job.transactionId,
+            _environmentId: job._environmentId,
+            _subscriberId: job._subscriberId,
+            _templateId: job._templateId,
+          });
+        }
+      } else if (sendMessageResult.status === SendMessageStatus.SKIPPED) {
+        await this.jobRepository.updateStatus(
+          job._environmentId,
+          job._id,
+          JobStatusEnum.CANCELED,
+          sendMessageResult.deliveryLifecycleState
+        );
+        await this.stepRunRepository.create(job, {
+          status: JobStatusEnum.CANCELED,
+        });
+
+        // Update workflow run delivery lifecycle after step skip/cancellation
+        await this.conditionallyUpdateDeliveryLifecycle(job, WorkflowRunStatusEnum.PROCESSING);
       }
-    } catch (error: any) {
+    } catch (caughtError: unknown) {
+      error = caughtError as Error;
+      await this.stepRunRepository.create(job, {
+        status: JobStatusEnum.FAILED,
+        errorCode: 'execution_error',
+        errorMessage: error.message,
+      });
+
       if (shouldHaltOnStepFailure(job) && !this.shouldBackoff(error)) {
         await this.jobRepository.cancelPendingJobs({
           transactionId: job.transactionId,
@@ -124,15 +352,27 @@ export class RunJob {
       if (shouldHaltOnStepFailure(job) || this.shouldBackoff(error)) {
         shouldQueueNextJob = false;
       }
-      throw error;
+      throw caughtError;
     } finally {
-      if (shouldQueueNextJob) {
+      if (shouldQueueNextJob && !isJobExtendedToSubscriberSchedule) {
         await this.tryQueueNextJobs(job);
-      } else {
+      } else if (!isJobExtendedToSubscriberSchedule) {
+        // Update workflow run status based on step runs when halting on step failure
+        await this.workflowRunService.updateDeliveryLifecycle({
+          workflowStatus: WorkflowRunStatusEnum.COMPLETED,
+          notificationId: job._notificationId,
+          environmentId: job._environmentId,
+          organizationId: job._organizationId,
+          _subscriberId: job._subscriberId,
+        });
         // Remove the attachments if the job should not be queued
         await this.storageHelperService.deleteAttachments(job.payload?.attachments);
       }
     }
+  }
+
+  private isUnsnoozeJob(job: JobEntity) {
+    return job.type === StepTypeEnum.IN_APP && job.delay && job.payload?.unsnooze;
   }
 
   /**
@@ -141,9 +381,9 @@ export class RunJob {
    * Otherwise, we continue trying to queue the next job in the chain.
    */
   private async tryQueueNextJobs(job: JobEntity): Promise<void> {
-    let currentFailedJob: JobEntity | null = job;
+    let currentJob: JobEntity | null = job;
     let nextJob: JobEntity | null = null;
-    if (!currentFailedJob) {
+    if (!currentJob) {
       return;
     }
 
@@ -151,20 +391,28 @@ export class RunJob {
 
     while (shouldContinueQueueNextJob) {
       try {
-        if (!currentFailedJob) {
+        if (!currentJob) {
           return;
         }
 
         nextJob = await this.jobRepository.findOne({
-          _environmentId: currentFailedJob._environmentId,
-          _parentId: currentFailedJob._id,
+          _environmentId: currentJob._environmentId,
+          _parentId: currentJob._id,
         });
 
         if (!nextJob) {
+          // Update workflow run status when there is no next job (workflow complete)
+          await this.workflowRunService.updateDeliveryLifecycle({
+            workflowStatus: WorkflowRunStatusEnum.COMPLETED,
+            notificationId: currentJob._notificationId,
+            environmentId: currentJob._environmentId,
+            organizationId: currentJob._organizationId,
+            _subscriberId: currentJob._subscriberId,
+          });
           return;
         }
 
-        await this.addJobUsecase.execute({
+        const addJobResult = await this.addJobUsecase.execute({
           userId: nextJob._userId,
           environmentId: nextJob._environmentId,
           organizationId: nextJob._organizationId,
@@ -172,11 +420,72 @@ export class RunJob {
           job: nextJob,
         });
 
-        shouldContinueQueueNextJob = false;
-      } catch (error: any) {
+        if (addJobResult.stepStatus === JobStatusEnum.SKIPPED) {
+          await this.jobRepository.updateOne(
+            {
+              _id: nextJob._id,
+              _environmentId: nextJob._environmentId,
+              _organizationId: nextJob._organizationId,
+            },
+            { $set: { status: JobStatusEnum.SKIPPED } }
+          );
+
+          await this.stepRunRepository.create(nextJob, {
+            status: JobStatusEnum.SKIPPED,
+          });
+
+          await this.createExecutionDetails.execute(
+            CreateExecutionDetailsCommand.create({
+              ...CreateExecutionDetailsCommand.getDetailsFromJob(nextJob),
+              detail: DetailEnum.SKIPPED_STEP_BY_CONDITIONS,
+              source: ExecutionDetailsSourceEnum.INTERNAL,
+              status: ExecutionDetailsStatusEnum.SUCCESS,
+              isTest: false,
+              isRetry: false,
+            })
+          );
+
+          // Update workflow run delivery lifecycle after step skip
+          await this.conditionallyUpdateDeliveryLifecycle(nextJob, WorkflowRunStatusEnum.PROCESSING);
+
+          currentJob = nextJob; // if skipped, continue to the next job
+        } else {
+          shouldContinueQueueNextJob = false;
+        }
+
+        if (addJobResult.workflowStatus === WorkflowRunStatusEnum.COMPLETED) {
+          await this.workflowRunService.updateDeliveryLifecycle({
+            workflowStatus: WorkflowRunStatusEnum.COMPLETED,
+            notificationId: nextJob._notificationId,
+            environmentId: nextJob._environmentId,
+            organizationId: nextJob._organizationId,
+            _subscriberId: nextJob._subscriberId,
+          });
+        }
+      } catch (error: unknown) {
         if (!nextJob) {
+          // Fallback: update workflow run status if nextJob is unexpectedly missing
+          // (should not occur due to prior nextJob check in loop)
+          await this.workflowRunService.updateDeliveryLifecycle({
+            workflowStatus: WorkflowRunStatusEnum.COMPLETED,
+            notificationId: currentJob._notificationId,
+            environmentId: currentJob._environmentId,
+            organizationId: currentJob._organizationId,
+            _subscriberId: currentJob._subscriberId,
+          });
           return;
         }
+
+        const jobAfterNext: Pick<JobEntity, '_id'> | null = await this.jobRepository.findOne(
+          {
+            _environmentId: nextJob._environmentId,
+            _parentId: nextJob._id,
+          },
+          '_id'
+        );
+
+        const isHaltingWorkflow = shouldHaltOnStepFailure(nextJob) && !this.shouldBackoff(error as Error);
+        const isLastJobInWorkflow = !jobAfterNext || isHaltingWorkflow;
 
         await this.setJobAsFailed.execute(
           SetJobAsFailedCommand.create({
@@ -184,11 +493,12 @@ export class RunJob {
             jobId: nextJob._id,
             organizationId: nextJob._organizationId,
             userId: nextJob._userId,
+            isLastJobInWorkflow,
           }),
-          error
+          error as Error
         );
 
-        if (shouldHaltOnStepFailure(nextJob) && !this.shouldBackoff(error)) {
+        if (isHaltingWorkflow) {
           await this.jobRepository.cancelPendingJobs({
             transactionId: nextJob.transactionId,
             _environmentId: nextJob._environmentId,
@@ -197,12 +507,11 @@ export class RunJob {
           });
         }
 
-        if (shouldHaltOnStepFailure(nextJob) || this.shouldBackoff(error)) {
-          shouldContinueQueueNextJob = false;
-          throw error;
+        if (shouldHaltOnStepFailure(nextJob) || this.shouldBackoff(error as Error)) {
+          return;
         }
 
-        currentFailedJob = nextJob;
+        currentJob = nextJob;
       } finally {
         if (nextJob) {
           await this.storageHelperService.deleteAttachments(nextJob.payload?.attachments);
@@ -211,17 +520,18 @@ export class RunJob {
     }
   }
 
-  private assignLogger(job) {
+  private assignLogger(job: JobEntity) {
     try {
-      this.logger?.assign({
-        transactionId: job.transactionId,
-        environmentId: job._environmentId,
-        organizationId: job._organizationId,
-        jobId: job._id,
-        jobType: job.type,
-      });
+      if (this.logger) {
+        this.logger.assign({
+          transactionId: job.transactionId,
+          jobId: job._id,
+          environmentId: job._environmentId,
+          organizationId: job._organizationId,
+        });
+      }
     } catch (e) {
-      Logger.error(e, 'RunJob', LOG_CONTEXT);
+      this.logger.error({ err: e }, 'Failed to assign logger');
     }
   }
 
@@ -236,17 +546,13 @@ export class RunJob {
     return activeDigestFollower;
   }
 
-  private isCanceledMainDigest(type: StepTypeEnum | undefined, status: JobStatusEnum) {
-    return type === StepTypeEnum.DIGEST && status === JobStatusEnum.CANCELED;
-  }
-
   @Instrument()
   private async delayedEventIsCanceled(
     job: JobEntity
   ): Promise<{ canceled: boolean; activeDigestFollower: JobEntity | null }> {
     let activeDigestFollower: JobEntity | null = null;
 
-    if (job.type !== StepTypeEnum.DIGEST && job.type !== StepTypeEnum.DELAY) {
+    if (job.type !== StepTypeEnum.DIGEST && job.type !== StepTypeEnum.DELAY && job.type !== StepTypeEnum.THROTTLE) {
       return { canceled: false, activeDigestFollower };
     }
 
@@ -285,6 +591,268 @@ export class RunJob {
   }
 
   public shouldBackoff(error: Error): boolean {
-    return error.message.includes(EXCEPTION_MESSAGE_ON_WEBHOOK_FILTER);
+    return error?.message?.includes(EXCEPTION_MESSAGE_ON_WEBHOOK_FILTER);
+  }
+
+  /**
+   * Checks if there are any remaining action steps (delay, digest, throttle) in the workflow
+   * we skip updating the delivery lifecycle to avoid unnecessary calculations for workflows that will complete quickly and update only the last step.
+   */
+  private async hasRemainingActionSteps(job: JobEntity, workflow: SelectedWorkflowFields): Promise<boolean> {
+    if (!workflow || !workflow.steps) {
+      return false;
+    }
+
+    // Find the current step index in the workflow
+    const currentStepIndex = workflow.steps.findIndex((step) => step._id === job.step?._id);
+
+    if (currentStepIndex === -1) {
+      return false;
+    }
+
+    // Check if any remaining steps after the current one are action steps
+    const remainingSteps = workflow.steps.slice(currentStepIndex + 1);
+
+    return remainingSteps.some((step) => {
+      // Check if step has a template with action step type
+      if (step.template?.type) {
+        return (
+          step.template.type === StepTypeEnum.CUSTOM ||
+          step.template.type === StepTypeEnum.DELAY ||
+          step.template.type === StepTypeEnum.DIGEST ||
+          step.template.type === StepTypeEnum.THROTTLE
+        );
+      }
+      return false;
+    });
+  }
+
+  /**
+   * Checks if the current job step is the last step in the workflow
+   */
+  private async isLastStepInWorkflow(job: JobEntity, workflow: SelectedWorkflowFields): Promise<boolean> {
+    if (!workflow || !workflow.steps) {
+      return false;
+    }
+
+    // Find the current step index in the workflow
+    const currentStepIndex = workflow.steps.findIndex((step) => step._id === job.step?._id);
+
+    if (currentStepIndex === -1) {
+      return false;
+    }
+
+    // Check if this is the last step in the workflow
+    return currentStepIndex === workflow.steps.length - 1;
+  }
+
+  /**
+   * Conditionally updates the delivery lifecycle only if there are no remaining action steps
+   * in the workflow. This optimization avoids unnecessary calculations for workflows that
+   * will complete quickly. Also skips updating if the current job itself is an action step.
+   * Additionally, skips execution if the current step is the last step in the workflow, because it will be updated as part of the workflow run finalization.
+   */
+  private async conditionallyUpdateDeliveryLifecycle(
+    job: JobEntity,
+    workflowStatus: WorkflowRunStatusEnum
+  ): Promise<void> {
+    this.logger.debug({ nv: { job } }, 'Conditionally updating delivery lifecycle');
+
+    if (
+      job.type === StepTypeEnum.TRIGGER ||
+      job.type === StepTypeEnum.DELAY ||
+      job.type === StepTypeEnum.DIGEST ||
+      job.type === StepTypeEnum.CUSTOM ||
+      job.type === StepTypeEnum.THROTTLE
+    ) {
+      return;
+    }
+
+    const workflow: SelectedWorkflowFields | null = await this.notificationTemplateRepository.findOne(
+      {
+        _id: job._templateId,
+        _environmentId: job._environmentId,
+      },
+      SELECTED_WORKFLOW_FIELDS_PROJECTION
+    );
+
+    if (!workflow || !workflow.steps) {
+      return;
+    }
+
+    const isLastStep = await this.isLastStepInWorkflow(job, workflow);
+    if (isLastStep) {
+      this.logger.trace(
+        { nv: { jobId: job._id, stepId: job.step?._id } },
+        'Skipping delivery lifecycle update for last step in workflow'
+      );
+      return;
+    }
+
+    const hasActionSteps = await this.hasRemainingActionSteps(job, workflow);
+
+    if (hasActionSteps) {
+      this.logger.trace(
+        { nv: { jobId: job._id, stepId: job.step?._id } },
+        'Skipping delivery lifecycle update for step with action type'
+      );
+      return;
+    }
+
+    await this.workflowRunService.updateDeliveryLifecycle({
+      workflowStatus,
+      notificationId: job._notificationId,
+      environmentId: job._environmentId,
+      organizationId: job._organizationId,
+      _subscriberId: job._subscriberId,
+    });
+  }
+
+  private shouldSkipScheduleCheck(job: JobEntity, critical: boolean | undefined): boolean {
+    // always deliver in-app messages or critical messages
+    // let trigger,digest and delay finish their execution
+    if (
+      job.type === StepTypeEnum.TRIGGER ||
+      job.type === StepTypeEnum.IN_APP ||
+      job.type === StepTypeEnum.DELAY ||
+      job.type === StepTypeEnum.DIGEST ||
+      critical
+    ) {
+      return true;
+    }
+
+    return false;
+  }
+
+  private async shouldExtendToSubscriberSchedule(job: JobEntity, critical: boolean): Promise<boolean> {
+    // should only extend to schedule for delay and digest when the workflow is not critical
+    if ((job.type === StepTypeEnum.DELAY || job.type === StepTypeEnum.DIGEST) && !critical) {
+      const bridgeResponse = await this.executeBridgeJob.execute(
+        ExecuteBridgeJobCommand.create({
+          environmentId: job._environmentId,
+          organizationId: job._organizationId,
+          userId: job._userId,
+          identifier: job.identifier,
+          jobId: job._id,
+          job: job,
+          variables: {},
+        })
+      );
+      const extendToSchedule = bridgeResponse?.outputs?.extendToSchedule as boolean | undefined;
+      return extendToSchedule ?? false;
+    }
+
+    return false;
+  }
+
+  private async extendJobToNextAvailableSchedule(
+    job: JobEntity,
+    schedule?: Schedule,
+    timezone?: string
+  ): Promise<boolean> {
+    const MAX_EXTENSIONS = 3; // maximum number of schedule extensions allowed
+    const currentExtensions = job.scheduleExtensionsCount ?? 0;
+
+    if (currentExtensions >= MAX_EXTENSIONS) {
+      this.logger.warn(
+        {
+          jobId: job._id,
+          subscriberId: job.subscriberId,
+          stepType: job.type,
+          extensions: currentExtensions,
+        },
+        'Maximum number of schedule extensions reached, sending the message'
+      );
+
+      await this.createExecutionDetails.execute(
+        CreateExecutionDetailsCommand.create({
+          ...CreateExecutionDetailsCommand.getDetailsFromJob(job),
+          detail: DetailEnum.SKIPPED_STEP_MAX_EXTENSIONS_REACHED,
+          source: ExecutionDetailsSourceEnum.INTERNAL,
+          status: ExecutionDetailsStatusEnum.SUCCESS,
+          isTest: false,
+          isRetry: false,
+        })
+      );
+
+      return false;
+    }
+
+    const nextAvailableTime = calculateNextAvailableTime(schedule, new Date(), timezone);
+    const delayMs = Math.max(0, differenceInMilliseconds(nextAvailableTime, new Date()));
+
+    if (delayMs === 0) {
+      return false;
+    }
+
+    await this.jobRepository.updateOne(
+      {
+        _id: job._id,
+        _environmentId: job._environmentId,
+      },
+      {
+        $set: {
+          scheduleExtensionsCount: currentExtensions + 1,
+          status: JobStatusEnum.DELAYED,
+        },
+      }
+    );
+
+    const updatedJob = await this.jobRepository.findOne({
+      _id: job._id,
+      _environmentId: job._environmentId,
+    });
+
+    if (!updatedJob) {
+      throw new PlatformException(`Job with id ${job._id} not found`);
+    }
+
+    await this.stepRunRepository.create(updatedJob, {
+      status: JobStatusEnum.DELAYED,
+    });
+
+    await this.createExecutionDetails.execute(
+      CreateExecutionDetailsCommand.create({
+        ...CreateExecutionDetailsCommand.getDetailsFromJob(updatedJob),
+        detail: DetailEnum.STEP_EXTENDED_TO_SCHEDULE,
+        source: ExecutionDetailsSourceEnum.INTERNAL,
+        status: ExecutionDetailsStatusEnum.PENDING,
+        isTest: false,
+        isRetry: false,
+        raw: JSON.stringify({
+          delayMs,
+          nextAvailableTime: timezone
+            ? formatInTimeZone(nextAvailableTime, timezone, 'yyyy-MM-dd HH:mm:ss zzz')
+            : nextAvailableTime.toISOString(),
+          timezone,
+          schedule,
+          scheduleExtensionsCount: currentExtensions + 1,
+          maxScheduleExtensions: MAX_EXTENSIONS,
+        }),
+      })
+    );
+
+    // re-queue the job with the new delay
+    await this.addJobUsecase.queueJob({
+      job: updatedJob,
+      delay: delayMs,
+      untilDate: nextAvailableTime,
+      timezone,
+    });
+
+    this.logger.info(
+      {
+        jobId: updatedJob._id,
+        subscriberId: updatedJob.subscriberId,
+        stepType: updatedJob.type,
+        delayMs,
+        nextAvailableTime: nextAvailableTime.toISOString(),
+        scheduleExtensionsCount: currentExtensions + 1,
+        maxExtensions: MAX_EXTENSIONS,
+      },
+      'Step was extended to the next available time in the subscriber schedule'
+    );
+
+    return true;
   }
 }

@@ -29,7 +29,11 @@ export type SubscribersSearchQueryData =
   operations.SubscribersControllerSearchSubscribersResponse;
 
 /**
- * Search for subscribers
+ * Search subscribers
+ *
+ * @remarks
+ * Search subscribers by their **email**, **phone**, **subscriberId** and **name**.
+ *     The search is case sensitive and supports pagination.Checkout all available filters in the query section.
  */
 export function useSubscribersSearch(
   request: operations.SubscribersControllerSearchSubscribersRequest,
@@ -47,7 +51,11 @@ export function useSubscribersSearch(
 }
 
 /**
- * Search for subscribers
+ * Search subscribers
+ *
+ * @remarks
+ * Search subscribers by their **email**, **phone**, **subscriberId** and **name**.
+ *     The search is case sensitive and supports pagination.Checkout all available filters in the query section.
  */
 export function useSubscribersSearchSuspense(
   request: operations.SubscribersControllerSearchSubscribersRequest,
@@ -83,13 +91,14 @@ export function setSubscribersSearchData(
     parameters: {
       after?: string | undefined;
       before?: string | undefined;
+      limit?: number | undefined;
+      orderDirection?: operations.QueryParamOrderDirection | undefined;
+      orderBy?: string | undefined;
+      includeCursor?: boolean | undefined;
       email?: string | undefined;
       name?: string | undefined;
       phone?: string | undefined;
       subscriberId?: string | undefined;
-      limit?: number | undefined;
-      orderDirection?: operations.OrderDirection | undefined;
-      orderBy?: any | undefined;
       idempotencyKey?: string | undefined;
     },
   ],
@@ -106,13 +115,14 @@ export function invalidateSubscribersSearch(
     [parameters: {
       after?: string | undefined;
       before?: string | undefined;
+      limit?: number | undefined;
+      orderDirection?: operations.QueryParamOrderDirection | undefined;
+      orderBy?: string | undefined;
+      includeCursor?: boolean | undefined;
       email?: string | undefined;
       name?: string | undefined;
       phone?: string | undefined;
       subscriberId?: string | undefined;
-      limit?: number | undefined;
-      orderDirection?: operations.OrderDirection | undefined;
-      orderBy?: any | undefined;
       idempotencyKey?: string | undefined;
     }]
   >,
@@ -148,13 +158,14 @@ export function buildSubscribersSearchQuery(
     queryKey: queryKeySubscribersSearch({
       after: request.after,
       before: request.before,
+      limit: request.limit,
+      orderDirection: request.orderDirection,
+      orderBy: request.orderBy,
+      includeCursor: request.includeCursor,
       email: request.email,
       name: request.name,
       phone: request.phone,
       subscriberId: request.subscriberId,
-      limit: request.limit,
-      orderDirection: request.orderDirection,
-      orderBy: request.orderBy,
       idempotencyKey: request.idempotencyKey,
     }),
     queryFn: async function subscribersSearchQueryFn(
@@ -179,13 +190,14 @@ export function queryKeySubscribersSearch(
   parameters: {
     after?: string | undefined;
     before?: string | undefined;
+    limit?: number | undefined;
+    orderDirection?: operations.QueryParamOrderDirection | undefined;
+    orderBy?: string | undefined;
+    includeCursor?: boolean | undefined;
     email?: string | undefined;
     name?: string | undefined;
     phone?: string | undefined;
     subscriberId?: string | undefined;
-    limit?: number | undefined;
-    orderDirection?: operations.OrderDirection | undefined;
-    orderBy?: any | undefined;
     idempotencyKey?: string | undefined;
   },
 ): QueryKey {

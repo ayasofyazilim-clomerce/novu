@@ -1,19 +1,18 @@
+import mailchimp from '@mailchimp/mailchimp_transactional';
+import { EmailProviderIdEnum } from '@novu/shared';
 import {
   ChannelTypeEnum,
+  CheckIntegrationResponseEnum,
+  EmailEventStatusEnum,
+  ICheckIntegrationResponse,
+  IEmailEventBody,
   IEmailOptions,
   IEmailProvider,
   ISendMessageSuccessResponse,
-  ICheckIntegrationResponse,
-  CheckIntegrationResponseEnum,
-  IEmailEventBody,
-  EmailEventStatusEnum,
 } from '@novu/stateless';
-
-import mailchimp from '@mailchimp/mailchimp_transactional';
-import { EmailProviderIdEnum } from '@novu/shared';
-import { IMandrilInterface, IMandrillSendOptions } from './mandril.interface';
 import { BaseProvider, CasingEnum } from '../../../base.provider';
 import { WithPassthrough } from '../../../utils/types';
+import { IMandrilInterface, IMandrillSendOptions, IMandrillTemplateSendOptions } from './mandril.interface';
 
 export enum MandrillStatusEnum {
   OPENED = 'open',
@@ -27,6 +26,12 @@ export enum MandrillStatusEnum {
   REJECTED = 'reject',
   DELIVERED = 'delivered',
 }
+
+export const isMandrillTemplateSendOptions = (
+  options: IMandrillSendOptions | IMandrillTemplateSendOptions
+): options is IMandrillTemplateSendOptions => {
+  return 'template_name' in options && 'template_content' in options && Array.isArray(options.template_content);
+};
 
 export class MandrillProvider extends BaseProvider implements IEmailProvider {
   id = EmailProviderIdEnum.Mandrill;
@@ -50,27 +55,63 @@ export class MandrillProvider extends BaseProvider implements IEmailProvider {
     emailOptions: IEmailOptions,
     bridgeProviderData: WithPassthrough<Record<string, unknown>> = {}
   ): Promise<ISendMessageSuccessResponse> {
-    const mandrillSendOption = this.transform<IMandrillSendOptions>(bridgeProviderData, {
-      message: {
-        from_email: emailOptions.from || this.config.from,
-        from_name: emailOptions.senderName || this.config.senderName,
-        subject: emailOptions.subject,
-        html: emailOptions.html,
-        to: this.mapTo(emailOptions),
-        attachments: emailOptions.attachments?.map((attachment) => ({
-          content: attachment.file.toString('base64'),
-          type: attachment.mime,
-          name: attachment?.name,
-        })),
-      },
-    }).body;
+    const mailData = this.createMailData(emailOptions);
+    const mandrillSendOption = this.transform<IMandrillSendOptions | IMandrillTemplateSendOptions>(
+      bridgeProviderData,
+      mailData
+    ).body;
+    let response;
 
-    const response = await this.transporter.messages.send(mandrillSendOption);
+    if (isMandrillTemplateSendOptions(mandrillSendOption)) {
+      response = await this.transporter.messages.sendTemplate(mandrillSendOption);
+    } else {
+      response = await this.transporter.messages.send(mandrillSendOption);
+    }
 
     return {
       id: response[0]._id,
       date: new Date().toISOString(),
     };
+  }
+
+  private createMailData(emailOptions: IEmailOptions) {
+    const message = {
+      from_email: emailOptions.from || this.config.from,
+      from_name: emailOptions.senderName || this.config.senderName,
+      subject: emailOptions.subject,
+      html: emailOptions.html,
+      to: this.mapTo(emailOptions),
+      attachments: emailOptions.attachments?.map((attachment) => ({
+        content: attachment.file.toString('base64'),
+        type: attachment.mime,
+        name: attachment?.name,
+      })),
+    };
+
+    const { customData } = emailOptions;
+
+    if (customData?.templateId) {
+      const templateGlobalMergeVars = customData.variables
+        ? Object.keys(customData.variables)
+            .map((key) => [key, customData.variables[key]])
+            .map(([name, content]) => ({
+              name,
+              content: String(content),
+            }))
+        : [];
+
+      return {
+        template_name: customData?.templateId,
+        template_content: [],
+        message: {
+          ...message,
+          html: undefined,
+          global_merge_vars: templateGlobalMergeVars,
+        },
+      };
+    } else {
+      return { message };
+    }
   }
 
   private mapTo(emailOptions: IEmailOptions) {
@@ -122,7 +163,6 @@ export class MandrillProvider extends BaseProvider implements IEmailProvider {
 
   parseEventBody(body: any | any[], identifier: string): IEmailEventBody | undefined {
     if (Array.isArray(body)) {
-      // eslint-disable-next-line no-param-reassign
       body = body.find((item) => item._id === identifier);
     }
 

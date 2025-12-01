@@ -1,11 +1,11 @@
+import { SubscriberResponseDto } from '@novu/api/models/components';
+import { UseMutationOptions, useMutation, useQueryClient } from '@tanstack/react-query';
 import { createSubscriber } from '@/api/subscribers';
 import { useEnvironment } from '@/context/environment/hooks';
 import { QueryKeys } from '@/utils/query-keys';
 import { OmitEnvironmentFromParameters } from '@/utils/types';
-import { SubscriberResponseDto } from '@novu/api/models/components';
-import { useMutation, UseMutationOptions, useQueryClient } from '@tanstack/react-query';
 
-type CreateSubscriberParameters = OmitEnvironmentFromParameters<typeof createSubscriber>;
+export type CreateSubscriberParameters = OmitEnvironmentFromParameters<typeof createSubscriber>;
 
 export const useCreateSubscriber = (
   options?: UseMutationOptions<SubscriberResponseDto, unknown, CreateSubscriberParameters>
@@ -17,7 +17,7 @@ export const useCreateSubscriber = (
     mutationFn: (args: CreateSubscriberParameters) => createSubscriber({ environment: currentEnvironment!, ...args }),
     ...options,
     onSuccess: async (data, variables, ctx) => {
-      await queryClient.invalidateQueries({
+      queryClient.invalidateQueries({
         queryKey: [QueryKeys.fetchSubscribers],
       });
 

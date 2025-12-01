@@ -1,16 +1,14 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import axios from 'axios';
-
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
-  CreateOrUpdateSubscriberUseCase,
   CreateOrUpdateSubscriberCommand,
+  CreateOrUpdateSubscriberUseCase,
   decryptCredentials,
+  FeatureFlagsService,
   IChannelCredentialsCommand,
   OAuthHandlerEnum,
   UpdateSubscriberChannel,
   UpdateSubscriberChannelCommand,
 } from '@novu/application-generic';
-import { ICredentialsDto } from '@novu/shared';
 import {
   ChannelTypeEnum,
   EnvironmentEntity,
@@ -18,11 +16,18 @@ import {
   IntegrationEntity,
   IntegrationRepository,
 } from '@novu/dal';
-import { ChatOauthCallbackCommand } from './chat-oauth-callback.command';
-import { ApiException } from '../../../shared/exceptions/api.exception';
+import { ENDPOINT_TYPES, FeatureFlagsKeysEnum, ICredentialsDto } from '@novu/shared';
+import axios from 'axios';
+import { CreateChannelEndpointCommand } from '../../../channel-endpoints/usecases/create-channel-endpoint/create-channel-endpoint.command';
+import { CreateChannelEndpoint } from '../../../channel-endpoints/usecases/create-channel-endpoint/create-channel-endpoint.usecase';
 import { validateEncryption } from '../chat-oauth/chat-oauth.usecase';
+import { ChatOauthCallbackCommand } from './chat-oauth-callback.command';
 import { ChatOauthCallbackResult, ResponseTypeEnum } from './chat-oauth-callback.result';
 
+/**
+ * @deprecated Use the new channel management approach.
+ * @see channel-endpoints and channel-connections modules
+ */
 @Injectable()
 export class ChatOauthCallback {
   readonly SLACK_ACCESS_URL = 'https://slack.com/api/oauth.v2.access';
@@ -32,11 +37,14 @@ export class ChatOauthCallback {
     private updateSubscriberChannelUsecase: UpdateSubscriberChannel,
     private integrationRepository: IntegrationRepository,
     private environmentRepository: EnvironmentRepository,
-    private createSubscriberUsecase: CreateOrUpdateSubscriberUseCase
+    private createSubscriberUsecase: CreateOrUpdateSubscriberUseCase,
+    private createChannelEndpoint: CreateChannelEndpoint,
+    private featureFlagsService: FeatureFlagsService
   ) {}
 
   async execute(command: ChatOauthCallbackCommand): Promise<ChatOauthCallbackResult> {
-    const integrationCredentials = await this.getIntegrationCredentials(command);
+    const integration = await this.getIntegration(command);
+    const integrationCredentials = integration.credentials;
 
     const { _organizationId, apiKeys } = await this.getEnvironment(command.environmentId);
 
@@ -49,7 +57,7 @@ export class ChatOauthCallback {
 
     const webhookUrl = await this.getWebhook(command, integrationCredentials);
 
-    await this.createSubscriber(_organizationId, command, webhookUrl);
+    await this.createSubscriber(_organizationId, command, webhookUrl, integration);
 
     if (integrationCredentials && integrationCredentials.redirectUrl) {
       return { typeOfResponse: ResponseTypeEnum.URL, resultString: integrationCredentials.redirectUrl };
@@ -61,7 +69,8 @@ export class ChatOauthCallback {
   private async createSubscriber(
     organizationId: string,
     command: ChatOauthCallbackCommand,
-    webhookUrl: string
+    webhookUrl: string,
+    integration: IntegrationEntity
   ): Promise<void> {
     await this.createSubscriberUsecase.execute(
       CreateOrUpdateSubscriberCommand.create({
@@ -70,6 +79,30 @@ export class ChatOauthCallback {
         subscriberId: command?.subscriberId,
       })
     );
+
+    const isSlackTeamsEnabled = await this.featureFlagsService.getFlag({
+      key: FeatureFlagsKeysEnum.IS_SLACK_TEAMS_ENABLED,
+      defaultValue: false,
+      environment: { _id: command.environmentId },
+      organization: { _id: organizationId },
+    });
+
+    if (isSlackTeamsEnabled) {
+      await this.createChannelEndpoint.execute(
+        CreateChannelEndpointCommand.create({
+          organizationId: organizationId,
+          environmentId: command.environmentId,
+          integrationIdentifier: integration.identifier,
+          subscriberId: command.subscriberId,
+          type: ENDPOINT_TYPES.WEBHOOK,
+          endpoint: {
+            url: webhookUrl,
+          },
+        })
+      );
+
+      return;
+    }
 
     const subscriberCredentials: IChannelCredentialsCommand = { webhookUrl, channel: command.providerId };
 
@@ -126,19 +159,19 @@ export class ChatOauthCallback {
 
     if (res?.data?.ok === false) {
       const metaData = res?.data?.response_metadata?.messages?.join(', ');
-      throw new ApiException(
+      throw new BadRequestException(
         `Provider ${command.providerId} returned error ${res.data.error}${metaData ? `, metadata:${metaData}` : ''}`
       );
     }
 
     if (!webhook) {
-      throw new ApiException(`Provider ${command.providerId} did not return a webhook url`);
+      throw new BadRequestException(`Provider ${command.providerId} did not return a webhook url`);
     }
 
     return webhook;
   }
 
-  private async getIntegrationCredentials(command: ChatOauthCallbackCommand) {
+  private async getIntegration(command: ChatOauthCallbackCommand) {
     const query: Partial<IntegrationEntity> & { _environmentId: string } = {
       _environmentId: command.environmentId,
       channel: ChannelTypeEnum.CHAT,
@@ -162,7 +195,7 @@ export class ChatOauthCallback {
 
     integration.credentials = decryptCredentials(integration.credentials);
 
-    return integration.credentials;
+    return integration;
   }
 
   private async hmacValidation({
@@ -178,7 +211,9 @@ export class ChatOauthCallback {
   }) {
     if (credentialHmac) {
       if (!externalHmacHash) {
-        throw new ApiException('Hmac is enabled on the integration, please provide a HMAC hash on the request params');
+        throw new BadRequestException(
+          'Hmac is enabled on the integration, please provide a HMAC hash on the request params'
+        );
       }
 
       validateEncryption({

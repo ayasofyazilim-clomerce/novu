@@ -1,9 +1,5 @@
-import {
-  ChannelTypeEnum,
-  ICredentials,
-  PushProviderIdEnum,
-} from '@novu/shared';
 import { FcmPushProvider } from '@novu/providers';
+import { ChannelTypeEnum, ICredentials, PushProviderIdEnum } from '@novu/shared';
 import { BasePushHandler } from './base.handler';
 
 export class FCMHandler extends BasePushHandler {
@@ -31,6 +27,10 @@ export class FCMHandler extends BasePushHandler {
       email: config.client_email,
       secretKey: config.private_key,
     });
+  }
+
+  isTokenInvalid(errorMessage: string): boolean {
+    return this.provider.isTokenInvalid(errorMessage);
   }
 }
 

@@ -1,7 +1,31 @@
-/* eslint-disable global-require */
 import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import {
+  analyticsService,
+  CacheServiceHealthIndicator,
+  ComputeJobWaitDurationService,
+  CreateExecutionDetails,
+  cacheService,
+  clickHouseService,
+  createNestLoggingModuleOptions,
+  DalServiceHealthIndicator,
+  ExecuteBridgeRequest,
+  featureFlagsService,
+  GetDecryptedSecretKey,
+  InvalidateCacheService,
+  LoggerModule,
+  QueuesModule,
+  RequestLogRepository,
+  StepRunRepository,
+  storageService,
+  TraceLogRepository,
+  WorkflowRunRepository,
+} from '@novu/application-generic';
 import {
   ChangeRepository,
+  CommunityMemberRepository,
+  CommunityOrganizationRepository,
+  CommunityUserRepository,
   ControlValuesRepository,
   DalService,
   EnvironmentRepository,
@@ -24,31 +48,8 @@ import {
   TopicSubscribersRepository,
   UserRepository,
   WorkflowOverrideRepository,
-  CommunityUserRepository,
-  CommunityMemberRepository,
-  CommunityOrganizationRepository,
 } from '@novu/dal';
-import {
-  analyticsService,
-  cacheService,
-  CacheServiceHealthIndicator,
-  ComputeJobWaitDurationService,
-  CreateExecutionDetails,
-  createNestLoggingModuleOptions,
-  DalServiceHealthIndicator,
-  distributedLockService,
-  ExecuteBridgeRequest,
-  ExecutionLogRoute,
-  featureFlagsService,
-  GetDecryptedSecretKey,
-  InvalidateCacheService,
-  LoggerModule,
-  QueuesModule,
-  storageService,
-} from '@novu/application-generic';
-
 import { isClerkEnabled, JobTopicNameEnum } from '@novu/shared';
-import { JwtModule } from '@nestjs/jwt';
 import packageJson from '../../../package.json';
 
 function getDynamicAuthProviders() {
@@ -79,6 +80,7 @@ function getDynamicAuthProviders() {
 const DAL_MODELS = [
   UserRepository,
   OrganizationRepository,
+  CommunityOrganizationRepository,
   EnvironmentRepository,
   ExecutionDetailsRepository,
   NotificationTemplateRepository,
@@ -111,6 +113,17 @@ const dalService = {
   },
 };
 
+const ANALYTICS_PROVIDERS = [
+  // Repositories
+  RequestLogRepository,
+  TraceLogRepository,
+  StepRunRepository,
+  WorkflowRunRepository,
+
+  // Services
+  clickHouseService,
+];
+
 const PROVIDERS = [
   analyticsService,
   cacheService,
@@ -118,19 +131,23 @@ const PROVIDERS = [
   ComputeJobWaitDurationService,
   dalService,
   DalServiceHealthIndicator,
-  distributedLockService,
   featureFlagsService,
   InvalidateCacheService,
   storageService,
   ...DAL_MODELS,
-  ExecutionLogRoute,
   CreateExecutionDetails,
   ExecuteBridgeRequest,
   GetDecryptedSecretKey,
+  ...ANALYTICS_PROVIDERS,
 ];
 
 const IMPORTS = [
-  QueuesModule.forRoot([JobTopicNameEnum.WEB_SOCKETS, JobTopicNameEnum.WORKFLOW, JobTopicNameEnum.INBOUND_PARSE_MAIL]),
+  QueuesModule.forRoot([
+    JobTopicNameEnum.WEB_SOCKETS,
+    JobTopicNameEnum.WORKFLOW,
+    JobTopicNameEnum.INBOUND_PARSE_MAIL,
+    JobTopicNameEnum.STANDARD,
+  ]),
   LoggerModule.forRoot(
     createNestLoggingModuleOptions({
       serviceName: packageJson.name,

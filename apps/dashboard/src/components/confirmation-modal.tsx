@@ -1,5 +1,7 @@
+import { ReactNode } from 'react';
+import { IconType } from 'react-icons';
+import { RiAlertFill } from 'react-icons/ri';
 import { Button } from '@/components/primitives/button';
-
 import {
   Dialog,
   DialogClose,
@@ -10,8 +12,6 @@ import {
   DialogPortal,
   DialogTitle,
 } from '@/components/primitives/dialog';
-import { ReactNode } from 'react';
-import { RiAlertFill } from 'react-icons/ri';
 
 type ConfirmationModalProps = {
   open: boolean;
@@ -20,6 +20,7 @@ type ConfirmationModalProps = {
   title: string;
   description: ReactNode;
   confirmButtonText: string;
+  confirmTrailingIcon?: IconType;
   isLoading?: boolean;
   isConfirmDisabled?: boolean;
 };
@@ -31,6 +32,7 @@ export const ConfirmationModal = ({
   title,
   description,
   confirmButtonText,
+  confirmTrailingIcon,
   isLoading,
   isConfirmDisabled,
 }: ConfirmationModalProps) => {
@@ -50,7 +52,17 @@ export const ConfirmationModal = ({
           </div>
           <DialogFooter>
             <DialogClose asChild aria-label="Close">
-              <Button type="button" size="sm" mode="outline" variant="secondary" onClick={() => onOpenChange(false)}>
+              <Button
+                type="button"
+                size="sm"
+                mode="outline"
+                variant="secondary"
+                onClick={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onOpenChange(false);
+                }}
+              >
                 Cancel
               </Button>
             </DialogClose>
@@ -59,7 +71,12 @@ export const ConfirmationModal = ({
               type="button"
               size="sm"
               variant="primary"
-              onClick={onConfirm}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                onConfirm();
+              }}
+              trailingIcon={confirmTrailingIcon}
               isLoading={isLoading}
               disabled={isConfirmDisabled}
             >

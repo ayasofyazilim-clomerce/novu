@@ -1,9 +1,8 @@
-/* eslint-disable global-require */
-import sinon from 'sinon';
-import { expect } from 'chai';
-import { EnvironmentRepository, NotificationRepository, CommunityOrganizationRepository } from '@novu/dal';
-import { UserSession } from '@novu/testing';
+import { MockCacheService, PinoLogger } from '@novu/application-generic';
+import { CommunityOrganizationRepository, EnvironmentRepository, NotificationRepository } from '@novu/dal';
 import { ApiServiceLevelEnum, isClerkEnabled } from '@novu/shared';
+import { UserSession } from '@novu/testing';
+import { expect } from 'chai';
 
 describe('GetPlatformNotificationUsage #novu-v2', () => {
   const eeBilling = require('@novu/ee-billing');
@@ -18,9 +17,12 @@ describe('GetPlatformNotificationUsage #novu-v2', () => {
   const communityOrganizationRepo = new CommunityOrganizationRepository();
 
   const createUseCase = () => {
-    const useCase = new GetPlatformNotificationUsage(environmentRepo, notificationRepo, communityOrganizationRepo);
-
-    return useCase;
+    return new GetPlatformNotificationUsage(
+      environmentRepo,
+      notificationRepo,
+      communityOrganizationRepo,
+      new PinoLogger({})
+    );
   };
   let session: UserSession;
 

@@ -1,29 +1,36 @@
-import { Button } from '@/components/primitives/button';
-import { useEnvironment } from '@/context/environment/hooks';
-import { buildRoute, ROUTES } from '@/utils/routes';
-import { cn } from '@/utils/ui';
+import { PermissionsEnum } from '@novu/shared';
 import { AnimatePresence, motion } from 'motion/react';
+import { useMemo } from 'react';
 import { RiCloseCircleLine, RiPlayCircleLine } from 'react-icons/ri';
 import { useNavigate } from 'react-router-dom';
+import { ActivityFilters } from '@/api/activity';
+import { defaultActivityFilters } from '@/components/activity/constants';
+import { Button } from '@/components/primitives/button';
+import { useEnvironment } from '@/context/environment/hooks';
+import { Protect } from '@/utils/protect';
+import { buildRoute, ROUTES } from '@/utils/routes';
+import { cn } from '@/utils/ui';
 import { ExternalLink } from '../shared/external-link';
 
 interface ActivityEmptyStateProps {
   className?: string;
+  filters?: ActivityFilters;
   emptySearchResults?: boolean;
   emptySearchTitle?: string;
   emptySearchDescription?: string;
-  emptyFiltersTitle?: string;
   emptyFiltersDescription?: string;
   onClearFilters?: () => void;
+  onTriggerWorkflow?: () => void;
 }
 
 export function ActivityEmptyState({
   className,
+  filters = defaultActivityFilters,
   emptySearchResults,
   onClearFilters,
+  onTriggerWorkflow,
   emptySearchTitle = 'No activity matches that filter',
   emptySearchDescription = 'Try adjusting your filters to see more results.',
-  emptyFiltersTitle = 'No activity in the past 30 days',
   emptyFiltersDescription = 'Your activity feed is empty. Once you trigger your first workflow, you can monitor notifications and view delivery details.',
 }: ActivityEmptyStateProps) {
   const navigate = useNavigate();
@@ -32,6 +39,12 @@ export function ActivityEmptyState({
   const handleNavigateToWorkflows = () => {
     navigate(buildRoute(ROUTES.WORKFLOWS, { environmentSlug: currentEnvironment?.slug ?? '' }));
   };
+
+  const handleTriggerWorkflow = onTriggerWorkflow || handleNavigateToWorkflows;
+
+  const emptyFiltersTitle = useMemo(() => {
+    return `No activity in the past ${filters?.dateRange}`;
+  }, [filters]);
 
   return (
     <AnimatePresence mode="wait">
@@ -76,12 +89,12 @@ export function ActivityEmptyState({
               duration: 0.2,
               delay: 0.25,
             }}
-            className="flex flex-col items-center gap-1 text-center"
+            className="flex flex-col items-center gap-2 text-center"
           >
-            <h2 className="text-foreground-900 text-lg font-medium">
+            <h2 className="text-text-sub text-md font-medium">
               {emptySearchResults ? emptySearchTitle : emptyFiltersTitle}
             </h2>
-            <p className="text-foreground-600 max-w-md text-sm font-normal">
+            <p className="text-text-soft max-w-md text-sm font-normal">
               {emptySearchResults ? emptySearchDescription : emptyFiltersDescription}
             </p>
           </motion.div>
@@ -116,14 +129,16 @@ export function ActivityEmptyState({
               <ExternalLink underline={false} variant="documentation" href="https://docs.novu.co" target="_blank">
                 View Docs
               </ExternalLink>
-              <Button
-                leadingIcon={RiPlayCircleLine}
-                variant="primary"
-                className="gap-2"
-                onClick={handleNavigateToWorkflows}
-              >
-                Trigger Workflow
-              </Button>
+              <Protect permission={PermissionsEnum.EVENT_WRITE}>
+                <Button
+                  leadingIcon={RiPlayCircleLine}
+                  variant="primary"
+                  className="gap-2"
+                  onClick={handleTriggerWorkflow}
+                >
+                  Trigger Workflow
+                </Button>
+              </Protect>
             </motion.div>
           )}
         </motion.div>

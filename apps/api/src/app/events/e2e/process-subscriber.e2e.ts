@@ -1,27 +1,21 @@
-import { expect } from 'chai';
-import axios from 'axios';
+import { CacheInMemoryProviderService, CacheService, InvalidateCacheService } from '@novu/application-generic';
 import {
-  NotificationTemplateEntity,
-  SubscriberEntity,
   MessageRepository,
-  SubscriberRepository,
+  NotificationTemplateEntity,
   NotificationTemplateRepository,
+  SubscriberEntity,
+  SubscriberRepository,
 } from '@novu/dal';
-import { UserSession, SubscribersService } from '@novu/testing';
 import { ChannelTypeEnum, ISubscribersDefine, IUpdateNotificationTemplateDto, StepTypeEnum } from '@novu/shared';
-import {
-  buildNotificationTemplateIdentifierKey,
-  buildNotificationTemplateKey,
-  CacheInMemoryProviderService,
-  CacheService,
-  InvalidateCacheService,
-} from '@novu/application-generic';
+import { SubscribersService, UserSession } from '@novu/testing';
+import axios from 'axios';
+import { expect } from 'chai';
 
 import { UpdateSubscriberPreferenceRequestDto } from '../../widgets/dtos/update-subscriber-preference-request.dto';
 
 const axiosInstance = axios.create();
 
-describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2', function () {
+describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2', () => {
   let session: UserSession;
   let template: NotificationTemplateEntity;
   let subscriber: SubscriberEntity;
@@ -50,7 +44,7 @@ describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2'
     subscriber = await subscriberService.createSubscriber();
   });
 
-  it('should trigger only active steps', async function () {
+  it('should trigger only active steps', async () => {
     const newTemplate = await session.createTemplate({
       steps: [
         {
@@ -99,7 +93,7 @@ describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2'
     expect(message.length).to.equal(2);
   });
 
-  it('should update a subscriber based on event', async function () {
+  it('should update a subscriber based on event', async () => {
     const payload: ISubscribersDefine = {
       subscriberId: subscriber.subscriberId,
       firstName: 'New Test Name',
@@ -123,7 +117,7 @@ describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2'
     expect(createdSubscriber?.locale).to.equal(payload.locale);
   });
 
-  it('should send only email trigger second time based on the subscriber preference', async function () {
+  it('should send only email trigger second time based on the subscriber preference', async () => {
     const payload: ISubscribersDefine = {
       subscriberId: session.subscriberId,
       firstName: 'New Test Name',
@@ -170,7 +164,7 @@ describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2'
     expect(message.length).to.equal(3);
   });
 
-  it('should ignore subscriber preference and send all triggers for system critical template', async function () {
+  it('should ignore subscriber preference and send all triggers for system critical template', async () => {
     const payload: ISubscribersDefine = {
       subscriberId: session.subscriberId,
       firstName: 'New Test Name',
@@ -194,14 +188,6 @@ describe('Trigger event - process subscriber /v1/events/trigger (POST) #novu-v2'
     });
 
     expect(message.length).to.equal(2);
-
-    const notificationTemplateKey = buildNotificationTemplateKey({
-      _id: template._id,
-      _environmentId: session.environment._id,
-    });
-    await invalidateCache.invalidateByKey({
-      key: notificationTemplateKey,
-    });
 
     const updateData = {
       channel: {

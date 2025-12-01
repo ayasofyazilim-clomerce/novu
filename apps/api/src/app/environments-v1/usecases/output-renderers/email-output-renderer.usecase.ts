@@ -1,24 +1,101 @@
-/* eslint-disable no-param-reassign */
-import { render as mailyRender, JSONContent as MailyJSONContent } from '@maily-to/render';
+import { JSONContent as MailyJSONContent, render as mailyRender } from '@maily-to/render';
 import { Injectable } from '@nestjs/common';
-import { EmailRenderOutput } from '@novu/shared';
-import { InstrumentUsecase } from '@novu/application-generic';
-
+import { ModuleRef } from '@nestjs/core';
+import {
+  CreateExecutionDetails,
+  CreateExecutionDetailsCommand,
+  DetailEnum,
+  EmailControlType,
+  InstrumentUsecase,
+  LayoutControlType,
+  PinoLogger,
+  sanitizeHTML,
+} from '@novu/application-generic';
+import {
+  ControlValuesEntity,
+  ControlValuesRepository,
+  JobEntity,
+  JobRepository,
+  LocalizationResourceEnum,
+  OrganizationEntity,
+} from '@novu/dal';
+import { createLiquidEngine } from '@novu/framework/internal';
+import {
+  ControlValuesLevelEnum,
+  EmailRenderOutput,
+  ExecutionDetailsSourceEnum,
+  ExecutionDetailsStatusEnum,
+  LAYOUT_CONTENT_VARIABLE,
+  LAYOUT_PREVIEW_EMAIL_STEP,
+} from '@novu/shared';
+import { Liquid } from 'liquidjs';
+import { GetLayoutCommand, GetLayoutUseCase } from '../../../layouts-v2/usecases/get-layout';
+import { GetOrganizationSettingsCommand } from '../../../organization/usecases/get-organization-settings/get-organization-settings.command';
+import { GetOrganizationSettings } from '../../../organization/usecases/get-organization-settings/get-organization-settings.usecase';
+import { MailyAttrsEnum } from '../../../shared/helpers/maily.types';
+import {
+  hasShow,
+  isButtonNode,
+  isImageNode,
+  isLinkNode,
+  isRepeatNode,
+  isVariableNode,
+  replaceMailyNodesByCondition,
+  wrapMailyInLiquid,
+} from '../../../shared/helpers/maily-utils';
+import { removeBrandingFromHtml } from '../../../shared/utils/html';
+import { BaseTranslationRendererUsecase } from './base-translation-renderer.usecase';
+import { NOVU_BRANDING_HTML } from './novu-branding-html';
 import { FullPayloadForRender, RenderCommand } from './render-command';
-import { WrapMailyInLiquidUseCase } from './maily-to-liquid/wrap-maily-in-liquid.usecase';
-import { MAILY_ITERABLE_MARK, MailyAttrsEnum } from './maily-to-liquid/maily.types';
-import { parseLiquid } from '../../../shared/helpers/liquid';
-import { hasShow, isRepeatNode, isVariableNode } from './maily-to-liquid/maily-utils';
 
-export class EmailOutputRendererCommand extends RenderCommand {}
+type MailyJSONMarks = NonNullable<MailyJSONContent['marks']>[number];
+
+export class EmailOutputRendererCommand extends RenderCommand {
+  environmentId: string;
+  organizationId: string;
+  workflowId?: string;
+  locale?: string;
+  skipLayoutRendering?: boolean;
+  jobId?: string;
+  stepId: string;
+  layoutId?: string;
+}
+
+function isJsonString(str: string): boolean {
+  try {
+    JSON.parse(str);
+  } catch (e) {
+    return false;
+  }
+
+  return true;
+}
 
 @Injectable()
-export class EmailOutputRendererUsecase {
-  constructor(private wrapMailyInLiquidUsecase: WrapMailyInLiquidUseCase) {}
+export class EmailOutputRendererUsecase extends BaseTranslationRendererUsecase {
+  private readonly liquidEngine: Liquid;
+
+  constructor(
+    private getOrganizationSettings: GetOrganizationSettings,
+    protected moduleRef: ModuleRef,
+    protected logger: PinoLogger,
+    private controlValuesRepository: ControlValuesRepository,
+    private getLayoutUseCase: GetLayoutUseCase,
+    private jobRepository: JobRepository,
+    private createExecutionDetails: CreateExecutionDetails
+  ) {
+    super(moduleRef, logger);
+    this.liquidEngine = createLiquidEngine();
+  }
 
   @InstrumentUsecase()
   async execute(renderCommand: EmailOutputRendererCommand): Promise<EmailRenderOutput> {
-    const { body, subject } = renderCommand.controlValues;
+    const {
+      body,
+      subject: controlSubject,
+      disableOutputSanitization,
+      layoutId: stepLayoutId,
+    } = renderCommand.controlValues as EmailControlType;
 
     if (!body || typeof body !== 'string') {
       /**
@@ -26,55 +103,420 @@ export class EmailOutputRendererUsecase {
        * This passes responsibility to framework to throw type validation exceptions
        * rather than handling invalid types here.
        */
+
       return {
-        subject: subject as string,
+        subject: controlSubject as string,
         body: body as string,
       };
     }
 
-    const liquifiedMaily = this.wrapMailyInLiquidUsecase.execute({ emailEditor: body });
-    const transformedMaily = await this.transformMailyContent(liquifiedMaily, renderCommand.fullPayloadForRender);
-    const parsedMaily = await this.parseMailyContentByLiquid(transformedMaily, renderCommand.fullPayloadForRender);
-    const strippedMaily = this.removeTrailingEmptyLines(parsedMaily);
-    const renderedHtml = await mailyRender(strippedMaily);
+    const {
+      fullPayloadForRender,
+      environmentId,
+      organizationId,
+      workflowId,
+      locale,
+      skipLayoutRendering,
+      jobId,
+      stepId,
+      layoutId: layoutIdForPreview,
+      organization,
+    } = renderCommand;
 
-    /**
-     * Force type mapping in case undefined control.
-     * This passes responsibility to framework to throw type validation exceptions
-     * rather than handling invalid types here.
-     */
-    return { subject: subject as string, body: renderedHtml };
+    // Step 1: Apply translations to subject (already liquid-interpolated)
+    const translatedSubject = await this.processSubjectTranslations(
+      controlSubject as string,
+      fullPayloadForRender,
+      environmentId,
+      organizationId,
+      workflowId,
+      locale,
+      organization
+    );
+
+    // Step 2: Process body content (with translations applied before rendering)
+    const renderedHtml = await this.renderWithLayout({
+      body,
+      stepLayoutId,
+      payload: fullPayloadForRender,
+      environmentId,
+      organizationId,
+      workflowId,
+      locale,
+      skipLayoutRendering,
+      jobId,
+      stepId,
+      organization,
+      layoutIdForPreview,
+    });
+
+    // Step 3: Add Novu branding
+    const htmlWithBranding = await this.appendNovuBranding(renderedHtml, organizationId);
+    const cleanedHtml = this.cleanupRenderedHtml(htmlWithBranding);
+
+    // Step 4: Sanitize output if needed
+    if (disableOutputSanitization) {
+      return { subject: translatedSubject, body: cleanedHtml };
+    }
+
+    const sanitizedBody = sanitizeHTML(cleanedHtml);
+
+    return {
+      subject: translatedSubject,
+      body: sanitizedBody,
+    };
   }
 
-  private removeTrailingEmptyLines(node: MailyJSONContent): MailyJSONContent {
-    if (!node.content || node.content.length === 0) return node;
+  private async getOverrideLayoutId({
+    job,
+    stepId,
+  }: {
+    job: JobEntity;
+    stepId: string;
+  }): Promise<string | null | undefined> {
+    const { overrides, step } = job;
+    let layoutIdentifier: string | null | undefined;
 
-    // Iterate from the end of the content and find the first non-empty node
-    let lastIndex = node.content.length;
-    // eslint-disable-next-line no-plusplus
-    for (let i = node.content.length - 1; i >= 0; i--) {
-      const childNode = node.content[i];
+    // Step 1: Check step-level override (highest priority)
+    const id = overrides?.steps?.[step._id ?? ''] ? step._id : stepId;
+    const stepOverrides = overrides?.steps?.[id ?? ''];
+    if (stepOverrides?.layoutId !== undefined) {
+      layoutIdentifier = stepOverrides.layoutId;
+    }
+    // Step 2: Check channel-level override for email
+    else if (overrides?.channels?.email?.layoutId !== undefined) {
+      layoutIdentifier = overrides.channels.email.layoutId;
+    }
+    // Step 3: Check deprecated layoutIdentifier (backward compatibility)
+    else if (overrides?.layoutIdentifier) {
+      layoutIdentifier = overrides.layoutIdentifier;
+    }
 
-      const isEmptyParagraph =
-        childNode.type === 'paragraph' && !childNode.text && (!childNode.content || childNode.content.length === 0);
+    // If no override is specified, return undefined (use step configuration)
+    if (layoutIdentifier === undefined) {
+      return undefined;
+    }
 
-      if (!isEmptyParagraph) {
-        lastIndex = i + 1; // Include this node in the result
-        break;
+    // If explicitly set to null, return null (no layout)
+    if (layoutIdentifier === null) {
+      return null;
+    }
+
+    return layoutIdentifier;
+  }
+
+  private async renderWithLayout({
+    body,
+    stepLayoutId,
+    payload,
+    environmentId,
+    organizationId,
+    workflowId,
+    locale,
+    skipLayoutRendering,
+    jobId,
+    stepId,
+    organization,
+    layoutIdForPreview,
+  }: {
+    body: string;
+    stepLayoutId?: string | null;
+    payload: FullPayloadForRender;
+    environmentId: string;
+    organizationId: string;
+    workflowId?: string;
+    locale?: string;
+    skipLayoutRendering?: boolean;
+    jobId?: string;
+    stepId: string;
+    organization?: OrganizationEntity;
+    layoutIdForPreview?: string;
+  }): Promise<string> {
+    let job: JobEntity | null = null;
+    let overrideLayoutId: string | null | undefined;
+    if (jobId) {
+      job = await this.jobRepository.findOne({
+        _id: jobId,
+        _environmentId: environmentId,
+      });
+      if (job) {
+        overrideLayoutId = await this.getOverrideLayoutId({ job, stepId });
       }
     }
 
-    // Slice the content to remove trailing empty nodes
-    const filteredContent = node.content.slice(0, lastIndex);
+    const overriddenStepLayoutId = overrideLayoutId || (overrideLayoutId === null ? null : stepLayoutId);
 
-    return { ...node, content: filteredContent };
+    let layoutControlsEntity: ControlValuesEntity | null = null;
+    // if the step control values have a layoutId then find layout controls entity
+    if (overriddenStepLayoutId) {
+      try {
+        const layout = await this.getLayoutUseCase.execute(
+          GetLayoutCommand.create({
+            layoutIdOrInternalId: overriddenStepLayoutId,
+            environmentId,
+            organizationId,
+            skipAdditionalFields: true,
+          })
+        );
+        layoutControlsEntity = await this.controlValuesRepository.findOne({
+          _organizationId: organizationId,
+          _environmentId: environmentId,
+          _layoutId: layout._id,
+          level: ControlValuesLevelEnum.LAYOUT_CONTROLS,
+        });
+        if (job) {
+          this.createExecutionDetails
+            .execute(
+              CreateExecutionDetailsCommand.create({
+                ...CreateExecutionDetailsCommand.getDetailsFromJob(job),
+                detail: DetailEnum.LAYOUT_SELECTED,
+                source: ExecutionDetailsSourceEnum.INTERNAL,
+                status: ExecutionDetailsStatusEnum.PENDING,
+                isTest: false,
+                isRetry: false,
+                raw: JSON.stringify({ name: layout.name, layoutId: layout.layoutId }),
+              })
+            )
+            .catch((promiseError) => {
+              this.logger.error({ error: promiseError }, 'Failed to create execution details');
+            });
+        }
+      } catch (error) {
+        if (job) {
+          this.createExecutionDetails
+            .execute(
+              CreateExecutionDetailsCommand.create({
+                ...CreateExecutionDetailsCommand.getDetailsFromJob(job),
+                detail: DetailEnum.LAYOUT_NOT_FOUND,
+                source: ExecutionDetailsSourceEnum.INTERNAL,
+                status: ExecutionDetailsStatusEnum.FAILED,
+                isTest: false,
+                isRetry: false,
+                raw: JSON.stringify({
+                  layoutId: overriddenStepLayoutId,
+                  error: error.message,
+                }),
+              })
+            )
+            .catch((promiseError) => {
+              this.logger.error({ error: promiseError }, 'Failed to create execution details');
+            });
+        }
+        throw error;
+      }
+    }
+
+    const isLayoutRendering = stepId === LAYOUT_PREVIEW_EMAIL_STEP && !!layoutIdForPreview;
+    const stepBodyHtml = await this.processBodyContent({
+      body,
+      payload,
+      environmentId,
+      organizationId,
+      resourceId: isLayoutRendering ? layoutIdForPreview : workflowId,
+      resourceType: isLayoutRendering ? LocalizationResourceEnum.LAYOUT : LocalizationResourceEnum.WORKFLOW,
+      locale,
+      noHtmlWrappingTags: !!layoutControlsEntity,
+      organization,
+    });
+
+    const cleanedStepBodyHtml = stepBodyHtml
+      .replace(/<!DOCTYPE.*?>/g, '')
+      .replace(/<!--\$-->/g, '')
+      .replace(/<!--\/\$-->/g, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+
+    if (!layoutControlsEntity || skipLayoutRendering || isLayoutRendering) {
+      return cleanedStepBodyHtml;
+    }
+
+    const layoutControlValues = layoutControlsEntity.controls as LayoutControlType;
+
+    return this.processBodyContent({
+      body: layoutControlValues.email?.body ?? '',
+      payload: {
+        ...payload,
+        [LAYOUT_CONTENT_VARIABLE]: removeBrandingFromHtml(cleanedStepBodyHtml.replace(/\n/g, '')),
+      },
+      environmentId,
+      organizationId,
+      resourceId: overriddenStepLayoutId ?? undefined,
+      resourceType: LocalizationResourceEnum.LAYOUT,
+      locale,
+    });
+  }
+
+  private enhanceContentVariable(body: string) {
+    return JSON.stringify(
+      replaceMailyNodesByCondition(
+        body,
+        (node) => node.type === 'variable' && node.attrs?.id === LAYOUT_CONTENT_VARIABLE,
+        (node) =>
+          ({
+            ...node,
+            attrs: {
+              ...node.attrs,
+              shouldDangerouslySetInnerHTML: true,
+            },
+          }) satisfies MailyJSONContent
+      )
+    );
+  }
+
+  private async processBodyContent({
+    body,
+    payload,
+    environmentId,
+    organizationId,
+    resourceId,
+    resourceType,
+    locale,
+    noHtmlWrappingTags,
+    organization,
+  }: {
+    body: string;
+    payload: FullPayloadForRender;
+    environmentId: string;
+    organizationId: string;
+    resourceId?: string;
+    resourceType?: LocalizationResourceEnum;
+    locale?: string;
+    noHtmlWrappingTags?: boolean;
+    organization?: OrganizationEntity;
+  }): Promise<string> {
+    if (typeof body === 'object' || (typeof body === 'string' && isJsonString(body))) {
+      const unescapedPayload = this.deepUnescapeTranslationStrings(payload) as FullPayloadForRender;
+      const escapedPayloadForJson = this.deepEscapePayloadStrings(unescapedPayload);
+      const liquifiedMaily = wrapMailyInLiquid(this.enhanceContentVariable(body));
+      const transformedMaily = await this.transformMailyContent(liquifiedMaily, escapedPayloadForJson);
+      const translatedMaily = await this.processMailyTranslations({
+        mailyContent: transformedMaily,
+        variables: escapedPayloadForJson,
+        environmentId,
+        organizationId,
+        resourceId,
+        resourceType,
+        locale,
+        organization,
+      });
+      const parsedMaily = await this.parseMailyContentByLiquid(translatedMaily, escapedPayloadForJson);
+
+      return await mailyRender(parsedMaily, { noHtmlWrappingTags });
+    } else {
+      const processedHtml = await this.processTextTranslations({
+        text: body,
+        variables: payload,
+        environmentId,
+        organizationId,
+        resourceId,
+        resourceType,
+        locale,
+        organization,
+      });
+
+      return processedHtml;
+    }
+  }
+
+  private async processSubjectTranslations(
+    subject: string,
+    variables: FullPayloadForRender,
+    environmentId: string,
+    organizationId: string,
+    workflowId?: string,
+    locale?: string,
+    organization?: OrganizationEntity
+  ): Promise<string> {
+    const unescapedVariables = this.deepUnescapeTranslationStrings(variables) as FullPayloadForRender;
+
+    const translatedSubject = await this.processStringTranslations({
+      content: subject,
+      variables: unescapedVariables,
+      environmentId,
+      organizationId,
+      resourceId: workflowId,
+      resourceType: LocalizationResourceEnum.WORKFLOW,
+      locale,
+      organization,
+    });
+
+    return this.unescapeJsonString(translatedSubject);
+  }
+
+  private async processMailyTranslations({
+    mailyContent,
+    variables,
+    environmentId,
+    organizationId,
+    resourceId,
+    resourceType,
+    locale,
+    organization,
+  }: {
+    mailyContent: MailyJSONContent;
+    variables: FullPayloadForRender;
+    environmentId: string;
+    organizationId: string;
+    resourceId?: string;
+    resourceType?: LocalizationResourceEnum;
+    locale?: string;
+    organization?: OrganizationEntity;
+  }): Promise<MailyJSONContent> {
+    const contentString = JSON.stringify(mailyContent);
+    const translatedContent = await this.processStringTranslations({
+      content: contentString,
+      variables,
+      environmentId,
+      organizationId,
+      resourceId,
+      resourceType,
+      locale,
+      organization,
+    });
+
+    return JSON.parse(translatedContent);
+  }
+
+  private async processTextTranslations({
+    text,
+    variables,
+    environmentId,
+    organizationId,
+    resourceId,
+    resourceType,
+    locale,
+    organization,
+  }: {
+    text: string;
+    variables: FullPayloadForRender;
+    environmentId: string;
+    organizationId: string;
+    resourceId?: string;
+    resourceType?: LocalizationResourceEnum;
+    locale?: string;
+    organization?: OrganizationEntity;
+  }): Promise<string> {
+    const unescapedVariables = this.deepUnescapeTranslationStrings(variables) as FullPayloadForRender;
+    const translatedText = await this.processStringTranslations({
+      content: text,
+      variables: unescapedVariables,
+      environmentId,
+      organizationId,
+      resourceId,
+      resourceType,
+      locale,
+      organization,
+    });
+
+    const unescapedTranslatedText = this.unescapeJsonString(translatedText);
+
+    return await this.liquidEngine.parseAndRender(unescapedTranslatedText, unescapedVariables);
   }
 
   private async parseMailyContentByLiquid(
     mailyContent: MailyJSONContent,
     variables: FullPayloadForRender
   ): Promise<MailyJSONContent> {
-    const parsedString = await parseLiquid(JSON.stringify(mailyContent), variables);
+    const parsedString = await this.liquidEngine.parseAndRender(JSON.stringify(mailyContent), variables);
 
     return JSON.parse(parsedString);
   }
@@ -90,7 +532,11 @@ export class EmailOutputRendererUsecase {
       const current = queue.shift()!;
 
       if (hasShow(current.node)) {
-        await this.handleShowNode(current.node, variables, current.parent);
+        const shouldShow = await this.handleShowNode(current.node, variables, current.parent);
+
+        if (!shouldShow) {
+          continue;
+        }
       }
 
       if (isRepeatNode(current.node)) {
@@ -115,16 +561,15 @@ export class EmailOutputRendererUsecase {
     node: MailyJSONContent & { attrs: { [MailyAttrsEnum.SHOW_IF_KEY]: string } },
     variables: FullPayloadForRender,
     parent?: MailyJSONContent
-  ): Promise<void> {
+  ): Promise<boolean> {
     const shouldShow = await this.evaluateShowCondition(variables, node);
     if (!shouldShow && parent?.content) {
       parent.content = parent.content.filter((pNode) => pNode !== node);
-
-      return;
     }
 
-    // @ts-ignore
-    delete node.attrs[MailyAttrsEnum.SHOW_IF_KEY];
+    delete (node.attrs as Record<string, string>)[MailyAttrsEnum.SHOW_IF_KEY];
+
+    return shouldShow;
   }
 
   private async handleEachNode(
@@ -147,7 +592,7 @@ export class EmailOutputRendererUsecase {
     node: MailyJSONContent & { attrs: { [MailyAttrsEnum.SHOW_IF_KEY]: string } }
   ): Promise<boolean> {
     const { [MailyAttrsEnum.SHOW_IF_KEY]: showIfKey } = node.attrs;
-    const parsedShowIfValue = await parseLiquid(showIfKey, variables);
+    const parsedShowIfValue = await this.liquidEngine.parseAndRender(showIfKey, variables);
 
     return this.stringToBoolean(parsedShowIfValue);
   }
@@ -159,15 +604,19 @@ export class EmailOutputRendererUsecase {
 
   /**
    * For 'each' node, multiply the content by the number of items in the iterable array
-   * and add indexes to the placeholders.
+   * and add indexes to the placeholders. If iterations attribute is set, limits the number
+   * of iterations to that value, otherwise renders all items.
    *
    * @example
    * node:
    * {
    *   type: 'each',
-   *   attrs: { each: '{{ payload.comments }}' },
+   *   attrs: {
+   *     each: '{{ payload.comments }}',
+   *     iterations: 2 // Optional - limits to first 2 items only
+   *   },
    *   content: [
-   *     { type: 'variable', text: '{{ payload.comments[0].author }}' }
+   *     { type: 'variable', text: '{{ payload.comments.author }}' }
    *   ]
    * }
    *
@@ -186,15 +635,16 @@ export class EmailOutputRendererUsecase {
     variables: FullPayloadForRender
   ): Promise<MailyJSONContent[]> {
     const iterablePath = node.attrs[MailyAttrsEnum.EACH_KEY];
+    const iterations = node.attrs[MailyAttrsEnum.ITERATIONS_KEY];
     const forEachNodes = node.content || [];
     const iterableArray = await this.getIterableArray(iterablePath, variables);
+    const limitedIterableArray = iterations ? iterableArray.slice(0, iterations) : iterableArray;
 
-    return iterableArray.flatMap((_, index) => this.processForEachNodes(forEachNodes, iterablePath, index));
+    return limitedIterableArray.flatMap((_, index) => this.processForEachNodes(forEachNodes, iterablePath, index));
   }
 
   private async getIterableArray(iterablePath: string, variables: FullPayloadForRender): Promise<unknown[]> {
-    const normalizedPath = iterablePath.replace(`[${MAILY_ITERABLE_MARK}]`, '');
-    const iterableArrayString = await parseLiquid(normalizedPath, variables);
+    const iterableArrayString = await this.liquidEngine.parseAndRender(iterablePath, variables);
 
     try {
       const parsedArray = JSON.parse(iterableArrayString.replace(/'/g, '"'));
@@ -209,15 +659,54 @@ export class EmailOutputRendererUsecase {
     }
   }
 
-  private processForEachNodes(nodes: MailyJSONContent[], iterablePath: string, index: number): MailyJSONContent[] {
+  private processForEachNodes(
+    nodes: MailyJSONContent[],
+    iterablePath: string,
+    index: number
+  ): Array<MailyJSONContent | MailyJSONMarks> {
     return nodes.map((node) => {
-      const processedNode = { ...node };
+      const processedNode = structuredClone(node);
 
       if (isVariableNode(processedNode)) {
         this.processVariableNodeTypes(processedNode);
-
         if (processedNode.text) {
-          processedNode.text = processedNode.text.replace(MAILY_ITERABLE_MARK, index.toString());
+          processedNode.text = this.addIndexToLiquidExpression(processedNode.text, iterablePath, index);
+        }
+
+        return processedNode;
+      }
+
+      if (isButtonNode(processedNode)) {
+        if (processedNode.attrs?.text) {
+          processedNode.attrs.text = this.addIndexToLiquidExpression(processedNode.attrs.text, iterablePath, index);
+        }
+
+        if (processedNode.attrs?.url) {
+          processedNode.attrs.url = this.addIndexToLiquidExpression(processedNode.attrs.url, iterablePath, index);
+        }
+
+        return processedNode;
+      }
+
+      if (isImageNode(processedNode)) {
+        if (processedNode.attrs?.src) {
+          processedNode.attrs.src = this.addIndexToLiquidExpression(processedNode.attrs.src, iterablePath, index);
+        }
+
+        if (processedNode.attrs?.externalLink) {
+          processedNode.attrs.externalLink = this.addIndexToLiquidExpression(
+            processedNode.attrs.externalLink,
+            iterablePath,
+            index
+          );
+        }
+
+        return processedNode;
+      }
+
+      if (isLinkNode(processedNode)) {
+        if (processedNode.attrs?.href) {
+          processedNode.attrs.href = this.addIndexToLiquidExpression(processedNode.attrs.href, iterablePath, index);
         }
 
         return processedNode;
@@ -227,8 +716,39 @@ export class EmailOutputRendererUsecase {
         processedNode.content = this.processForEachNodes(processedNode.content, iterablePath, index);
       }
 
+      if (processedNode.marks?.length) {
+        processedNode.marks = this.processForEachNodes(
+          processedNode.marks,
+          iterablePath,
+          index
+        ) as Array<MailyJSONMarks>;
+      }
+
       return processedNode;
     });
+  }
+
+  /**
+   * Add the index to the liquid expression if it doesn't already have an array index
+   *
+   * @example
+   * text: '{{ payload.comments.author }}'
+   * iterablePath: '{{ payload.comments }}'
+   * index: 0
+   * result: '{{ payload.comments[0].author }}'
+   */
+  private addIndexToLiquidExpression(text: string, iterablePath: string, index: number): string {
+    const cleanPath = iterablePath.replace(/\{\{|\}\}/g, '').trim();
+    const liquidMatch = text.match(/\{\{\s*(.*?)\s*\}\}/);
+
+    if (!liquidMatch) return text;
+
+    const [path, ...filters] = liquidMatch[1].split('|').map((part) => part.trim());
+    if (path.includes('[')) return text;
+
+    const newPath = path.replace(cleanPath, `${cleanPath}[${index}]`);
+
+    return filters.length ? `{{ ${newPath} | ${filters.join(' | ')} }}` : `{{ ${newPath} }}`;
   }
 
   private stringToBoolean(value: string): boolean {
@@ -240,5 +760,130 @@ export class EmailOutputRendererUsecase {
     } catch {
       return Boolean(normalized);
     }
+  }
+
+  private async appendNovuBranding(html: string, organizationId: string): Promise<string> {
+    try {
+      const { removeNovuBranding } = await this.getOrganizationSettings.execute(
+        GetOrganizationSettingsCommand.create({
+          organizationId,
+        })
+      );
+
+      if (removeNovuBranding) {
+        return html;
+      }
+
+      return this.insertBrandingHtml(html);
+    } catch (error) {
+      // If there's any error fetching organization, return original HTML to avoid breaking emails
+      return html;
+    }
+  }
+
+  private insertBrandingHtml(html: string): string {
+    const matches = [...html.matchAll(/<\/body>/gi)];
+
+    if (matches.length === 0) {
+      if (html?.trim()) {
+        return html + NOVU_BRANDING_HTML;
+      } else {
+        return html;
+      }
+    }
+
+    const lastIndex = matches[matches.length - 1].index!;
+
+    return html.slice(0, lastIndex) + NOVU_BRANDING_HTML + html.slice(lastIndex);
+  }
+
+  private deepEscapePayloadStrings(payload: FullPayloadForRender): FullPayloadForRender {
+    return this.deepEscapeObject(payload) as FullPayloadForRender;
+  }
+
+  private deepEscapeObject(obj: unknown): unknown {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'string') {
+      return this.escapeStringForJson(obj);
+    }
+
+    if (typeof obj === 'number' || typeof obj === 'boolean') {
+      return obj;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.deepEscapeObject(item));
+    }
+
+    if (typeof obj === 'object') {
+      const escapedObj: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        escapedObj[key] = this.deepEscapeObject(value);
+      }
+
+      return escapedObj;
+    }
+
+    return obj;
+  }
+
+  private escapeStringForJson(str: string): string {
+    return str
+      .replace(/\\/g, '\\\\') // Escape backslashes
+      .replace(/"/g, '\\"') // Escape quotes
+      .replace(/\n/g, '\\n') // Escape newlines
+      .replace(/\r/g, '\\r') // Escape carriage returns
+      .replace(/\t/g, '\\t'); // Escape tabs
+  }
+
+  private unescapeJsonString(str: string): string {
+    return str
+      .replace(/\\t/g, '\t')
+      .replace(/\\r/g, '\r')
+      .replace(/\\n/g, '\n')
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'")
+      .replace(/\\\\/g, '\\');
+  }
+
+  private deepUnescapeTranslationStrings(obj: unknown): unknown {
+    if (obj === null || obj === undefined) {
+      return obj;
+    }
+
+    if (typeof obj === 'string') {
+      return this.unescapeJsonString(obj);
+    }
+
+    if (typeof obj === 'number' || typeof obj === 'boolean') {
+      return obj;
+    }
+
+    if (Array.isArray(obj)) {
+      return obj.map((item) => this.deepUnescapeTranslationStrings(item));
+    }
+
+    if (typeof obj === 'object') {
+      const unescapedObj: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(obj)) {
+        unescapedObj[key] = this.deepUnescapeTranslationStrings(value);
+      }
+
+      return unescapedObj;
+    }
+
+    return obj;
+  }
+
+  private cleanupRenderedHtml(html: string): string {
+    /*
+     * Convert paragraphs that contain only whitespace characters to empty paragraphs to prevent Gmail clipping.
+     * Gmail's clipping algorithm detects trailing whitespace content and marks emails as "message clipped".
+     * This preserves the intended spacing while removing the problematic whitespace content.
+     */
+    return html.replace(/<p([^>]*)>\s+<\/p>/g, '<p$1></p>');
   }
 }

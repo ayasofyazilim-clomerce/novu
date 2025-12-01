@@ -1,5 +1,5 @@
-import { Button } from '@/components/primitives/button';
 import { ChevronLeftIcon, ChevronRightIcon } from '@radix-ui/react-icons';
+import { Button } from '@/components/primitives/button';
 
 interface CursorPaginationProps {
   hasNext: boolean;
@@ -11,7 +11,7 @@ interface CursorPaginationProps {
 
 export function CursorPagination({ hasNext, hasPrevious, onNext, onPrevious, onFirst }: CursorPaginationProps) {
   return (
-    <div className="border-t-stroke-soft bottom-0 mt-auto border-t bg-white py-3">
+    <div className="bottom-0 mt-auto bg-white py-3">
       <div className="border-input flex place-self-center rounded-lg border bg-transparent">
         <Button
           variant="secondary"

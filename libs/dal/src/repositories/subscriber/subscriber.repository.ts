@@ -1,12 +1,11 @@
-import { FilterQuery } from 'mongoose';
-import { DirectionEnum, EnvironmentId, ISubscribersDefine, OrganizationId, SubscriberDto } from '@novu/shared';
+import { DirectionEnum, EnvironmentId, ISubscribersDefine, OrganizationId } from '@novu/shared';
+import { DalException } from '../../shared';
+import type { EnforceEnvOrOrgIds } from '../../types';
+import { BaseRepository } from '../base-repository';
+import { BulkCreateSubscriberEntity } from './bulk.create.subscriber.entity';
 import { SubscriberDBModel, SubscriberEntity } from './subscriber.entity';
 import { Subscriber } from './subscriber.schema';
 import { IExternalSubscribersEntity } from './types';
-import { BaseRepository } from '../base-repository';
-import { DalException } from '../../shared';
-import type { EnforceEnvOrOrgIds } from '../../types';
-import { BulkCreateSubscriberEntity } from './bulk.create.subscriber.entity';
 
 export class SubscriberRepository extends BaseRepository<SubscriberDBModel, SubscriberEntity, EnforceEnvOrOrgIds> {
   constructor() {
@@ -16,14 +15,15 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
   async findBySubscriberId(
     environmentId: string,
     subscriberId: string,
-    secondaryRead = false
+    secondaryRead = false,
+    select?: string
   ): Promise<SubscriberEntity | null> {
     return await this.findOne(
       {
         _environmentId: environmentId,
         subscriberId,
       },
-      undefined,
+      select,
       { readPreference: secondaryRead ? 'secondaryPreferred' : 'primary' }
     );
   }
@@ -173,7 +173,14 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
     phone?: string;
     subscriberId?: string;
     name?: string;
-  }): Promise<{ subscribers: SubscriberEntity[]; next: string | null; previous: string | null }> {
+    includeCursor?: boolean;
+  }): Promise<{
+    subscribers: SubscriberEntity[];
+    next: string | null;
+    previous: string | null;
+    totalCount: number;
+    totalCountCapped: boolean;
+  }> {
     if (query.before && query.after) {
       throw new DalException('Cannot specify both "before" and "after" cursors at the same time.');
     }
@@ -191,6 +198,8 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
           subscribers: [],
           next: null,
           previous: null,
+          totalCount: 0,
+          totalCountCapped: false,
         };
       }
     }
@@ -207,6 +216,7 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
       limit: query.limit,
       sortDirection: query.sortDirection,
       sortBy: query.sortBy,
+      includeCursor: query.includeCursor,
       query: {
         _environmentId: query.environmentId,
         _organizationId: query.organizationId,
@@ -225,10 +235,7 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
               },
             }),
             ...(query.subscriberId && {
-              subscriberId: {
-                $regex: regExpEscape(query.subscriberId),
-                $options: 'i',
-              },
+              subscriberId: query.subscriberId,
             }),
             ...(query.name && {
               $expr: {
@@ -254,6 +261,8 @@ export class SubscriberRepository extends BaseRepository<SubscriberDBModel, Subs
       subscribers: pagination.data,
       next: pagination.next,
       previous: pagination.previous,
+      totalCount: pagination.totalCount,
+      totalCountCapped: pagination.totalCountCapped,
     };
   }
 }

@@ -1,16 +1,11 @@
 import { Injectable } from '@nestjs/common';
-import { SubscriberRepository } from '@novu/dal';
 import { AddressingTypeEnum, TriggerEventStatusEnum, TriggerRequestCategoryEnum } from '@novu/shared';
-
-import { TriggerEventToAllCommand } from './trigger-event-to-all.command';
 import { ParseEventRequest, ParseEventRequestBroadcastCommand } from '../parse-event-request';
+import { TriggerEventToAllCommand } from './trigger-event-to-all.command';
 
 @Injectable()
 export class TriggerEventToAll {
-  constructor(
-    private subscriberRepository: SubscriberRepository,
-    private parseEventRequest: ParseEventRequest
-  ) {}
+  constructor(private parseEventRequest: ParseEventRequest) {}
 
   public async execute(command: TriggerEventToAllCommand) {
     await this.parseEventRequest.execute(
@@ -25,8 +20,10 @@ export class TriggerEventToAll {
         overrides: command.overrides || {},
         actor: command.actor,
         tenant: command.tenant,
+        context: command.context,
         requestCategory: TriggerRequestCategoryEnum.SINGLE,
         bridgeUrl: command.bridgeUrl,
+        requestId: command.requestId,
       })
     );
 

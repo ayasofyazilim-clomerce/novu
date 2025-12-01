@@ -1,10 +1,3 @@
-import { useEnvironment, useFetchEnvironments } from '@/context/environment/hooks';
-import { useFetchIntegrations } from '@/hooks/use-fetch-integrations';
-import { useTelemetry } from '@/hooks/use-telemetry';
-import { StepTypeEnum } from '@/utils/enums';
-import { buildRoute, ROUTES } from '@/utils/routes';
-import { TelemetryEvent } from '@/utils/telemetry';
-import { Step } from '@/utils/types';
 import { useUser } from '@clerk/clerk-react';
 import { ChannelTypeEnum, WorkflowResponseDto } from '@novu/shared';
 import { motion } from 'motion/react';
@@ -17,6 +10,14 @@ import {
   RiSparkling2Fill,
 } from 'react-icons/ri';
 import { useNavigate } from 'react-router-dom';
+import { useEnvironment, useFetchEnvironments } from '@/context/environment/hooks';
+import { useFeatureFlag } from '@/hooks/use-feature-flag';
+import { useFetchIntegrations } from '@/hooks/use-fetch-integrations';
+import { useTelemetry } from '@/hooks/use-telemetry';
+import { StepTypeEnum } from '@/utils/enums';
+import { buildRoute, ROUTES } from '@/utils/routes';
+import { TelemetryEvent } from '@/utils/telemetry';
+import { Step } from '@/utils/types';
 import { cn } from '../../utils/ui';
 import { Badge, BadgeIcon } from '../primitives/badge';
 import { Popover, PopoverClose, PopoverContent, PopoverTrigger } from '../primitives/popover';
@@ -31,6 +32,11 @@ type ChecklistItem = {
   title: string;
   isCompleted: (steps: Step[]) => boolean;
   onClick: () => void;
+};
+
+const preventDefault = (e: Event) => {
+  e.preventDefault();
+  e.stopPropagation();
 };
 
 export function WorkflowChecklist({ steps, workflow }: WorkflowChecklistProps) {
@@ -59,26 +65,35 @@ export function WorkflowChecklist({ steps, workflow }: WorkflowChecklistProps) {
             unsafeMetadata: {
               ...user.unsafeMetadata,
               workflowChecklistCompleted: true,
+              workflowChecklistClosed: true,
             },
           });
         }
-      } else {
+      } else if (!user?.unsafeMetadata?.workflowChecklistClosed) {
         setIsOpen(true);
       }
     }
   }, [steps, checklistItems, currentEnvironment, workflow, integrations, environments, user, telemetry]);
 
   const handleOpenChange = (open: boolean) => {
-    if (open === false) return;
     setIsOpen(open);
 
-    telemetry(TelemetryEvent.WORKFLOW_CHECKLIST_OPENED, {
-      workflowId: workflow?.workflowId,
-    });
+    if (open) {
+      telemetry(TelemetryEvent.WORKFLOW_CHECKLIST_OPENED, {
+        workflowId: workflow?.workflowId,
+      });
+    } else {
+      user?.update({
+        unsafeMetadata: {
+          ...user.unsafeMetadata,
+          workflowChecklistClosed: true,
+        },
+      });
+    }
   };
 
   return (
-    <Popover open={isOpen} onOpenChange={handleOpenChange}>
+    <Popover open={isOpen} onOpenChange={handleOpenChange} modal={false}>
       <PopoverTrigger asChild>
         <button type="button" className="absolute bottom-[18px] left-[18px]">
           <Badge color="red" size="md" variant="lighter" className="cursor-pointer">
@@ -105,7 +120,14 @@ export function WorkflowChecklist({ steps, workflow }: WorkflowChecklistProps) {
           </Badge>
         </button>
       </PopoverTrigger>
-      <PopoverContent side="top" alignOffset={0} align="start" className="w-[325px] p-3">
+      <PopoverContent
+        side="top"
+        alignOffset={0}
+        align="start"
+        className="w-[325px] p-3"
+        onInteractOutside={preventDefault}
+        onOpenAutoFocus={preventDefault}
+      >
         <div className="flex items-start justify-between">
           <div>
             <h3 className="text-foreground-900 text-label-sm mb-1 font-medium">Actions Recommended</h3>
@@ -117,7 +139,6 @@ export function WorkflowChecklist({ steps, workflow }: WorkflowChecklistProps) {
             <button
               type="button"
               className="text-text-soft hover:text-text-sub -mr-1 -mt-1 rounded-sm p-1 transition-colors"
-              onClick={() => setIsOpen(false)}
             >
               <RiCloseLine className="h-4 w-4" />
             </button>
@@ -178,7 +199,7 @@ function useChecklistItems(steps: Step[]) {
           telemetry(TelemetryEvent.WORKFLOW_CHECKLIST_STEP_CLICKED, { stepTitle: 'Add a step' });
 
           if (steps.length === 0) {
-            const addStepButton = document.querySelector('[data-test-id="add-step-button"]');
+            const addStepButton = document.querySelector('[data-testid="add-step-menu-button"]');
 
             if (addStepButton instanceof HTMLElement) {
               addStepButton.click();
@@ -227,7 +248,7 @@ function useChecklistItems(steps: Step[]) {
         onClick: () => {
           telemetry(TelemetryEvent.WORKFLOW_CHECKLIST_STEP_CLICKED, { stepTitle: 'Trigger workflow' });
           navigate(
-            buildRoute(ROUTES.TEST_WORKFLOW, {
+            buildRoute(ROUTES.TRIGGER_WORKFLOW, {
               environmentSlug: currentEnvironment?.slug ?? '',
               workflowSlug: workflow?.slug ?? '',
             })
@@ -235,7 +256,7 @@ function useChecklistItems(steps: Step[]) {
         },
         link: {
           text: 'Learn how to trigger',
-          url: 'https://docs.novu.co/platform/triggers',
+          url: 'https://docs.novu.co/platform/trigger',
         },
       },
     ],

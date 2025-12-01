@@ -1,6 +1,6 @@
+import { ResourceOriginEnum } from '@novu/shared';
 import { RiCloseLine, RiGuideFill } from 'react-icons/ri';
 import { useNavigate } from 'react-router-dom';
-import { WorkflowOriginEnum } from '@novu/shared';
 
 import { CompactButton } from '@/components/primitives/button-compact';
 import { EditStepConditionsForm } from '@/components/workflow-editor/steps/conditions/edit-step-conditions-form';
@@ -19,13 +19,13 @@ export const EditStepConditions = () => {
   const { uiSchema } = step.controls ?? {};
   const { skip } = uiSchema?.properties ?? {};
 
-  if (!skip || workflow.origin !== WorkflowOriginEnum.NOVU_CLOUD) {
+  if (!skip || workflow.origin !== ResourceOriginEnum.NOVU_CLOUD) {
     navigate('..', { relative: 'path' });
     return null;
   }
 
   return (
-    <StepDrawer title={`Edit ${step?.name} Conditions`}>
+    <StepDrawer title={`Edit ${step?.name} Conditions`} maxWidth="sm:max-w-[800px]">
       <header className="flex h-12 w-full flex-row items-center justify-between gap-3 border-b py-4 pl-3 pr-3">
         <div className="mr-auto flex items-center gap-2.5 py-2 text-sm font-medium">
           <RiGuideFill className="size-4" />

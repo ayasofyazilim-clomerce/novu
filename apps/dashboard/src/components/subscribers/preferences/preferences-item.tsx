@@ -1,9 +1,9 @@
+import { ChannelTypeEnum } from '@novu/shared';
 import { STEP_TYPE_TO_ICON } from '@/components/icons/utils';
 import { Step } from '@/components/primitives/step';
 import { Switch } from '@/components/primitives/switch';
 import { STEP_TYPE_TO_COLOR } from '@/utils/color';
 import { capitalize } from '@/utils/string';
-import { ChannelTypeEnum } from '@novu/shared';
 
 const CHANNEL_LABELS_LOOKUP: Record<`${ChannelTypeEnum}`, string> = {
   [ChannelTypeEnum.IN_APP]: 'In-App',
@@ -26,7 +26,7 @@ export function PreferencesItem(props: PreferencesItemProps) {
 
   return (
     <div>
-      <div className="mt-2 flex w-full items-center justify-between space-y-1">
+      <div className="flex w-full items-center justify-between space-y-1">
         <div className="flex items-center gap-2">
           <Step variant={STEP_TYPE_TO_COLOR[channel]} className="size-5">
             <Icon />

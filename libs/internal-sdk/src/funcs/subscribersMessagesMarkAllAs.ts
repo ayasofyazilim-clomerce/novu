@@ -19,35 +19,73 @@ import {
   UnexpectedClientError,
 } from "../models/errors/httpclienterrors.js";
 import * as errors from "../models/errors/index.js";
-import { SDKError } from "../models/errors/sdkerror.js";
+import { NovuError } from "../models/errors/novuerror.js";
+import { ResponseValidationError } from "../models/errors/responsevalidationerror.js";
 import { SDKValidationError } from "../models/errors/sdkvalidationerror.js";
 import * as operations from "../models/operations/index.js";
+import { APICall, APIPromise } from "../types/async.js";
 import { Result } from "../types/fp.js";
 
 /**
- * Mark a subscriber messages as seen, read, unseen or unread
+ * Update notifications state
+ *
+ * @remarks
+ * Update subscriber's multiple in-app (inbox) notifications state such as seen, read, unseen or unread by **subscriberId**.
+ *       **messageId** is of type mongodbId of notifications
  */
-export async function subscribersMessagesMarkAllAs(
+export function subscribersMessagesMarkAllAs(
+  client: NovuCore,
+  messageMarkAsRequestDto: components.MessageMarkAsRequestDto,
+  subscriberId: string,
+  idempotencyKey?: string | undefined,
+  options?: RequestOptions,
+): APIPromise<
+  Result<
+    operations.SubscribersV1ControllerMarkMessagesAsResponse,
+    | errors.ErrorDto
+    | errors.ValidationErrorDto
+    | NovuError
+    | ResponseValidationError
+    | ConnectionError
+    | RequestAbortedError
+    | RequestTimeoutError
+    | InvalidRequestError
+    | UnexpectedClientError
+    | SDKValidationError
+  >
+> {
+  return new APIPromise($do(
+    client,
+    messageMarkAsRequestDto,
+    subscriberId,
+    idempotencyKey,
+    options,
+  ));
+}
+
+async function $do(
   client: NovuCore,
   messageMarkAsRequestDto: components.MessageMarkAsRequestDto,
   subscriberId: string,
   idempotencyKey?: string | undefined,
   options?: RequestOptions,
 ): Promise<
-  Result<
-    operations.SubscribersV1ControllerMarkMessagesAsResponse,
-    | errors.ErrorDto
-    | errors.ErrorDto
-    | errors.ValidationErrorDto
-    | errors.ErrorDto
-    | SDKError
-    | SDKValidationError
-    | UnexpectedClientError
-    | InvalidRequestError
-    | RequestAbortedError
-    | RequestTimeoutError
-    | ConnectionError
-  >
+  [
+    Result<
+      operations.SubscribersV1ControllerMarkMessagesAsResponse,
+      | errors.ErrorDto
+      | errors.ValidationErrorDto
+      | NovuError
+      | ResponseValidationError
+      | ConnectionError
+      | RequestAbortedError
+      | RequestTimeoutError
+      | InvalidRequestError
+      | UnexpectedClientError
+      | SDKValidationError
+    >,
+    APICall,
+  ]
 > {
   const input: operations.SubscribersV1ControllerMarkMessagesAsRequest = {
     messageMarkAsRequestDto: messageMarkAsRequestDto,
@@ -63,7 +101,7 @@ export async function subscribersMessagesMarkAllAs(
     "Input validation failed",
   );
   if (!parsed.ok) {
-    return parsed;
+    return [parsed, { status: "invalid" }];
   }
   const payload = parsed.value;
   const body = encodeJSON("body", payload.MessageMarkAsRequestDto, {
@@ -95,9 +133,10 @@ export async function subscribersMessagesMarkAllAs(
   const requestSecurity = resolveGlobalSecurity(securityInput);
 
   const context = {
-    baseURL: options?.serverURL ?? "",
+    options: client._options,
+    baseURL: options?.serverURL ?? client._baseURL ?? "",
     operationID: "SubscribersV1Controller_markMessagesAs",
-    oAuth2Scopes: [],
+    oAuth2Scopes: null,
 
     resolvedSecurity: requestSecurity,
 
@@ -125,10 +164,11 @@ export async function subscribersMessagesMarkAllAs(
     path: path,
     headers: headers,
     body: body,
+    userAgent: client._options.userAgent,
     timeoutMs: options?.timeoutMs || client._options.timeoutMs || -1,
   }, options);
   if (!requestRes.ok) {
-    return requestRes;
+    return [requestRes, { status: "invalid" }];
   }
   const req = requestRes.value;
 
@@ -155,7 +195,7 @@ export async function subscribersMessagesMarkAllAs(
     retryCodes: context.retryCodes,
   });
   if (!doResult.ok) {
-    return doResult;
+    return [doResult, { status: "request-error", request: req }];
   }
   const response = doResult.value;
 
@@ -166,16 +206,15 @@ export async function subscribersMessagesMarkAllAs(
   const [result] = await M.match<
     operations.SubscribersV1ControllerMarkMessagesAsResponse,
     | errors.ErrorDto
-    | errors.ErrorDto
     | errors.ValidationErrorDto
-    | errors.ErrorDto
-    | SDKError
-    | SDKValidationError
-    | UnexpectedClientError
-    | InvalidRequestError
+    | NovuError
+    | ResponseValidationError
+    | ConnectionError
     | RequestAbortedError
     | RequestTimeoutError
-    | ConnectionError
+    | InvalidRequestError
+    | UnexpectedClientError
+    | SDKValidationError
   >(
     M.json(
       201,
@@ -194,10 +233,10 @@ export async function subscribersMessagesMarkAllAs(
     M.fail(503),
     M.fail("4XX"),
     M.fail("5XX"),
-  )(response, { extraFields: responseFields });
+  )(response, req, { extraFields: responseFields });
   if (!result.ok) {
-    return result;
+    return [result, { status: "complete", request: req, response }];
   }
 
-  return result;
+  return [result, { status: "complete", request: req, response }];
 }

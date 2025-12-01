@@ -6,7 +6,6 @@ import { BaseProvider, CasingEnum } from '../../../base.provider';
 import { WithPassthrough } from '../../../utils/types';
 
 declare global {
-  // eslint-disable-next-line @typescript-eslint/naming-convention
   interface RequestInit {
     agent: ProxyAgent;
   }
@@ -50,6 +49,10 @@ export class BrevoSmsProvider extends BaseProvider implements ISmsProvider {
     });
 
     const body: { messageId: string } = await response.json();
+
+    if (!body.messageId) {
+      throw new Error(`Failed: ${JSON.stringify(body)}`);
+    }
 
     return {
       id: body.messageId,

@@ -1,7 +1,7 @@
-import { useEffect, useState } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
 import { JobStatusEnum } from '@novu/shared';
-
+import { useQueryClient } from '@tanstack/react-query';
+import { useEffect, useState } from 'react';
+import { ActivityResponse } from '@/api/activity';
 import { useEnvironment } from '@/context/environment/hooks';
 import { useFetchActivity } from '@/hooks/use-fetch-activity';
 import { QueryKeys } from '@/utils/query-keys';
@@ -29,11 +29,36 @@ export const usePullActivity = (activityId?: string | null) => {
     );
 
     // Only stop refetching if we have an activity and it's not pending
-    setShouldRefetch(isPending || !activity?.jobs?.length);
+    const newShouldRefetch = isPending || !activity?.jobs?.length;
 
-    queryClient.invalidateQueries({
-      queryKey: [QueryKeys.fetchActivity, currentEnvironment?._id, activityId],
-    });
+    if (newShouldRefetch) {
+      /**
+       * Due to async inserts on the activity list, we want to provide 5 more seconds to refetch the activity
+       * For any non-inserted traces.
+       */
+      setTimeout(() => {
+        setShouldRefetch(newShouldRefetch);
+
+        // invalidate that single activity in the activities list cache
+        queryClient.setQueriesData(
+          { queryKey: [QueryKeys.fetchActivities, currentEnvironment?._id] },
+          (activityResponse: ActivityResponse | undefined) => {
+            if (!activityResponse) return activityResponse;
+
+            return {
+              ...activityResponse,
+              data: activityResponse.data.map((el) => {
+                if (el._id === activity._id) {
+                  return { ...activity };
+                }
+
+                return el;
+              }),
+            };
+          }
+        );
+      }, 5000);
+    }
   }, [activity, queryClient, currentEnvironment, activityId]);
 
   return {

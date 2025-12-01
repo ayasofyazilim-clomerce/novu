@@ -1,9 +1,11 @@
-import { STEP_TYPE_TO_COLOR } from '@/utils/color';
-import { StepTypeEnum } from '@/utils/enums';
-import { cn } from '@/utils/ui';
+import { FeatureFlagsKeysEnum } from '@novu/shared';
 import { PopoverPortal } from '@radix-ui/react-popover';
 import React, { ReactNode, useState } from 'react';
 import { RiAddLine } from 'react-icons/ri';
+import { useFeatureFlag } from '@/hooks/use-feature-flag';
+import { STEP_TYPE_TO_COLOR } from '@/utils/color';
+import { StepTypeEnum } from '@/utils/enums';
+import { cn } from '@/utils/ui';
 import { STEP_TYPE_TO_ICON } from '../icons/utils';
 import { Badge } from '../primitives/badge';
 import { Popover, PopoverContent, PopoverTrigger } from '../primitives/popover';
@@ -50,6 +52,7 @@ const MenuItem = ({
           'text-foreground-300 cursor-not-allowed': disabled,
         }
       )}
+      data-testid={`add-step-menu-item-${stepType}`}
     >
       <Icon
         className={`bg-neutral-alpha-50 h-6 w-6 rounded-md p-1 opacity-40`}
@@ -69,12 +72,15 @@ const MenuItem = ({
 
 export const AddStepMenu = ({
   visible = false,
+  className,
   onMenuItemClick,
 }: {
   visible?: boolean;
+  className?: string;
   onMenuItemClick: (stepType: StepTypeEnum) => void;
 }) => {
   const [isPopoverOpen, setIsPopoverOpen] = useState(false);
+  const isThrottleStepEnabled = useFeatureFlag(FeatureFlagsKeysEnum.IS_THROTTLE_STEP_ENABLED);
 
   const handleMenuItemClick = (stepType: StepTypeEnum) => {
     onMenuItemClick(stepType);
@@ -89,12 +95,16 @@ export const AddStepMenu = ({
       }}
     >
       <PopoverTrigger asChild>
-        <span data-test-id="add-step-button">
+        <span data-testid="add-step-menu-button">
           <Node
             variant="sm"
-            className={cn('opacity-0 transition duration-300 ease-out hover:opacity-100', {
-              'opacity-100': isPopoverOpen || visible,
-            })}
+            className={cn(
+              'opacity-0 transition duration-300 ease-out hover:opacity-100',
+              {
+                'opacity-100': isPopoverOpen || visible,
+              },
+              className
+            )}
           >
             <RiAddLine className="h-4 w-4" />
           </Node>
@@ -136,6 +146,11 @@ export const AddStepMenu = ({
                 <MenuItem stepType={StepTypeEnum.DIGEST} onClick={() => handleMenuItemClick(StepTypeEnum.DIGEST)}>
                   Digest
                 </MenuItem>
+                {isThrottleStepEnabled && (
+                  <MenuItem stepType={StepTypeEnum.THROTTLE} onClick={() => handleMenuItemClick(StepTypeEnum.THROTTLE)}>
+                    Throttle
+                  </MenuItem>
+                )}
               </MenuItemsGroup>
             </MenuGroup>
           </div>

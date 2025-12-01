@@ -1,26 +1,32 @@
 import { Controller, Get, Param, Query } from '@nestjs/common';
-import { ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
-import { ChannelTypeEnum, UserSessionData } from '@novu/shared';
-
-import { GetActivityFeed } from './usecases/get-activity-feed/get-activity-feed.usecase';
-import { GetActivityFeedCommand } from './usecases/get-activity-feed/get-activity-feed.command';
-import { GetActivityStats, GetActivityStatsCommand } from './usecases/get-activity-stats';
-import { GetActivityGraphStats } from './usecases/get-activity-graph-states/get-activity-graph-states.usecase';
-import { GetActivityGraphStatsCommand } from './usecases/get-activity-graph-states/get-activity-graph-states.command';
-import { ActivityStatsResponseDto } from './dtos/activity-stats-response.dto';
-import { ActivitiesResponseDto, ActivityNotificationResponseDto } from './dtos/activities-response.dto';
-import { ActivityGraphStatesResponse } from './dtos/activity-graph-states-response.dto';
-import { ActivitiesRequestDto } from './dtos/activities-request.dto';
-import { GetActivity } from './usecases/get-activity/get-activity.usecase';
-import { GetActivityCommand } from './usecases/get-activity/get-activity.command';
-
-import { UserSession } from '../shared/framework/user.decorator';
+import { ApiExcludeEndpoint, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { FeatureFlagsService, RequirePermissions } from '@novu/application-generic';
+import {
+  ChannelTypeEnum,
+  FeatureFlagsKeysEnum,
+  PermissionsEnum,
+  SeverityLevelEnum,
+  UserSessionData,
+} from '@novu/shared';
+import { RequireAuthentication } from '../auth/framework/auth.decorator';
 import { ExternalApiAccessible } from '../auth/framework/external-api.decorator';
 import { ApiCommonResponses, ApiOkResponse, ApiResponse } from '../shared/framework/response.decorator';
-import { UserAuthentication } from '../shared/framework/swagger/api.key.security';
 import { SdkGroupName, SdkMethodName } from '../shared/framework/swagger/sdk.decorators';
+import { UserSession } from '../shared/framework/user.decorator';
+import { ActivitiesRequestDto } from './dtos/activities-request.dto';
+import { ActivitiesResponseDto, ActivityNotificationResponseDto } from './dtos/activities-response.dto';
+import { ActivityGraphStatesResponse } from './dtos/activity-graph-states-response.dto';
+import { ActivityStatsResponseDto } from './dtos/activity-stats-response.dto';
+import { GetActivityCommand } from './usecases/get-activity/get-activity.command';
+import { GetActivity } from './usecases/get-activity/get-activity.usecase';
+import { GetActivityFeedCommand } from './usecases/get-activity-feed/get-activity-feed.command';
+import { GetActivityFeed } from './usecases/get-activity-feed/get-activity-feed.usecase';
+import { GetActivityGraphStatsCommand } from './usecases/get-activity-graph-states/get-activity-graph-states.command';
+import { GetActivityGraphStats } from './usecases/get-activity-graph-states/get-activity-graph-states.usecase';
+import { GetActivityStats, GetActivityStatsCommand } from './usecases/get-activity-stats';
 
 @ApiCommonResponses()
+@RequireAuthentication()
 @Controller('/notifications')
 @ApiTags('Notifications')
 export class NotificationsController {
@@ -28,7 +34,8 @@ export class NotificationsController {
     private getActivityFeedUsecase: GetActivityFeed,
     private getActivityStatsUsecase: GetActivityStats,
     private getActivityGraphStatsUsecase: GetActivityGraphStats,
-    private getActivityUsecase: GetActivity
+    private getActivityUsecase: GetActivity,
+    private featureFlagsService: FeatureFlagsService
   ) {}
 
   @Get('')
@@ -36,11 +43,15 @@ export class NotificationsController {
     type: ActivitiesResponseDto,
   })
   @ApiOperation({
-    summary: 'Get notifications',
+    summary: 'List all events',
+    description: `List all notification events (triggered events) for the current environment. 
+    This API supports filtering by **channels**, **templates**, **emails**, **subscriberIds**, **transactionId**, **topicKey**, **severity**, **contextKeys**. 
+    Checkout all available filters in the query section.
+    This API returns event triggers, to list each channel notifications, check messages APIs.`,
   })
-  @UserAuthentication()
   @ExternalApiAccessible()
-  listNotifications(
+  @RequirePermissions(PermissionsEnum.NOTIFICATION_READ)
+  async listNotifications(
     @UserSession() user: UserSessionData,
     @Query() query: ActivitiesRequestDto
   ): Promise<ActivitiesResponseDto> {
@@ -64,6 +75,27 @@ export class NotificationsController {
       subscribersQuery = Array.isArray(query.subscriberIds) ? query.subscriberIds : [query.subscriberIds];
     }
 
+    let transactionIdQuery: string[] | undefined;
+    if (query.transactionId) {
+      transactionIdQuery = Array.isArray(query.transactionId) ? query.transactionId : [query.transactionId];
+    }
+
+    let severityQuery: SeverityLevelEnum[] | null = null;
+    if (query.severity) {
+      severityQuery = Array.isArray(query.severity) ? query.severity : [query.severity];
+    }
+
+    // Check if context search is enabled via feature flag
+    const isContextEnabled = await this.featureFlagsService.getFlag({
+      key: FeatureFlagsKeysEnum.IS_CONTEXT_ENABLED,
+      defaultValue: false,
+      organization: { _id: user.organizationId },
+      user: { _id: user._id },
+      environment: { _id: user.environmentId },
+    });
+
+    const contextKeysQuery: string[] | undefined = isContextEnabled ? query.contextKeys : undefined;
+
     return this.getActivityFeedUsecase.execute(
       GetActivityFeedCommand.create({
         page: query.page,
@@ -76,21 +108,28 @@ export class NotificationsController {
         emails: emailsQuery,
         search: query.search,
         subscriberIds: subscribersQuery,
-        transactionId: query.transactionId,
+        transactionId: transactionIdQuery,
+        topicKey: query.topicKey,
+        severity: severityQuery,
         after: query.after,
         before: query.before,
+        contextKeys: contextKeysQuery,
       })
     );
   }
 
   @ApiResponse(ActivityStatsResponseDto)
+  @ApiExcludeEndpoint()
   @ApiOperation({
-    summary: 'Get notification statistics',
+    summary: 'Retrieve events statistics',
+    description: `Retrieve notification statistics for the current environment. 
+    This API returns the number of weekly and monthly notifications sent for the current environment.`,
+    deprecated: true,
   })
   @Get('/stats')
-  @UserAuthentication()
   @ExternalApiAccessible()
   @SdkGroupName('Notifications.Stats')
+  @RequirePermissions(PermissionsEnum.NOTIFICATION_READ)
   getActivityStats(@UserSession() user: UserSessionData): Promise<ActivityStatsResponseDto> {
     return this.getActivityStatsUsecase.execute(
       GetActivityStatsCommand.create({
@@ -101,11 +140,14 @@ export class NotificationsController {
   }
 
   @Get('/graph/stats')
-  @UserAuthentication()
   @ExternalApiAccessible()
+  @ApiExcludeEndpoint()
   @ApiResponse(ActivityGraphStatesResponse, 200, true)
   @ApiOperation({
-    summary: 'Get notification graph statistics',
+    summary: 'Retrieve events graph statistics',
+    description: `Retrieve events graph statistics for the current environment. 
+    This API returns the number of events sent. This data is used to generate the graph in the legacy dashboard.`,
+    deprecated: true,
   })
   @ApiQuery({
     name: 'days',
@@ -114,6 +156,7 @@ export class NotificationsController {
   })
   @SdkGroupName('Notifications.Stats')
   @SdkMethodName('graph')
+  @RequirePermissions(PermissionsEnum.NOTIFICATION_READ)
   getActivityGraphStats(
     @UserSession() user: UserSessionData,
     @Query('days') days = 32
@@ -131,10 +174,13 @@ export class NotificationsController {
   @Get('/:notificationId')
   @ApiResponse(ActivityNotificationResponseDto)
   @ApiOperation({
-    summary: 'Get notification',
+    summary: 'Retrieve an event',
+    description: `Retrieve an event by its unique key identifier **notificationId**. 
+    Here **notificationId** is of mongodbId type. 
+    This API returns the event details - execution logs, status, actual notification (message) generated by each workflow step.`,
   })
-  @UserAuthentication()
   @ExternalApiAccessible()
+  @RequirePermissions(PermissionsEnum.NOTIFICATION_READ)
   getNotification(
     @UserSession() user: UserSessionData,
     @Param('notificationId') notificationId: string

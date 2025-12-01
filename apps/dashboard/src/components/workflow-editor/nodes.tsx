@@ -1,33 +1,31 @@
-import { ComponentProps } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Slug } from '@novu/shared';
 import { Node as FlowNode, Handle, NodeProps, Position } from '@xyflow/react';
-import { RiFilter3Fill, RiPlayCircleLine } from 'react-icons/ri';
+import { AnimatePresence, motion } from 'motion/react';
+import { ComponentProps, KeyboardEventHandler, useCallback, useState } from 'react';
+import { RiInsertRowTop, RiPlayCircleLine } from 'react-icons/ri';
 import { RQBJsonLogic } from 'react-querybuilder';
-import { WorkflowOriginEnum } from '@novu/shared';
-
-import { createStep } from '@/components/workflow-editor/step-utils';
-import { useWorkflow } from '@/components/workflow-editor/workflow-provider';
+import { Link } from 'react-router-dom';
+import { useConditionsCount } from '@/hooks/use-conditions-count';
 import { STEP_TYPE_TO_COLOR } from '@/utils/color';
-import { TEMPLATE_CONFIGURABLE_STEP_TYPES } from '@/utils/constants';
 import { StepTypeEnum } from '@/utils/enums';
-import { buildRoute, ROUTES } from '@/utils/routes';
-import { getWorkflowIdFromSlug, STEP_DIVIDER } from '@/utils/step';
 import { cn } from '@/utils/ui';
 import { STEP_TYPE_TO_ICON } from '../icons/utils';
 import { AddStepMenu } from './add-step-menu';
-import { Node, NodeBody, NodeError, NodeHeader, NodeIcon, NodeName } from './base-node';
-import { useConditionsCount } from '@/hooks/use-conditions-count';
+import { AnimationStepWrapper } from './animation-step-wrapper';
+import { NODE_WIDTH, Node, NodeBody, NodeError, NodeHeader, NodeIcon, NodeName } from './base-node';
+import { ConditionBadge } from './condition-badge';
+import { useCanvasContext } from './drag-context';
+import { WorkflowNodeActionBar } from './workflow-node-action-bar';
 
 export type NodeData = {
-  addStepIndex?: number;
+  index: number;
   content?: string;
   error?: string;
   name?: string;
-  stepSlug?: string;
-  controlValues?: Record<string, any>;
-  workflowSlug?: string;
-  environment?: string;
-  readOnly?: boolean;
+  stepSlug?: Slug;
+  controlValues?: Record<string, unknown>;
+  isPending?: boolean;
+  triggerLink?: string;
 };
 
 export type NodeType = FlowNode<NodeData>;
@@ -38,9 +36,8 @@ const bottomHandleClasses = `data-[handlepos=bottom]:w-2 data-[handlepos=bottom]
 
 const handleClassName = `${topHandleClasses} ${bottomHandleClasses}`;
 
-export const TriggerNode = ({
-  data,
-}: NodeProps<FlowNode<{ environmentSlug: string; workflowSlug: string; readOnly?: boolean }>>) => {
+export const TriggerNode = ({ data }: NodeProps<FlowNode<{ triggerLink?: string }>>) => {
+  const { isReadOnly, showStepPreview } = useCanvasContext();
   const content = (
     <Node
       className="relative rounded-tl-none [&>span]:rounded-tl-none"
@@ -54,97 +51,202 @@ export const TriggerNode = ({
       <NodeHeader type={StepTypeEnum.TRIGGER}>
         <NodeName>Workflow trigger</NodeName>
       </NodeHeader>
-      <NodeBody type={StepTypeEnum.TRIGGER} controlValues={{}} showPreview={data.readOnly}>
+      <NodeBody type={StepTypeEnum.TRIGGER} controlValues={{}} showPreview={showStepPreview}>
         This step triggers this workflow
       </NodeBody>
+      {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
       <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
     </Node>
   );
 
-  if (data.readOnly) {
+  if (isReadOnly) {
     return content;
   }
 
+  return <Link to={data.triggerLink ?? ''}>{content}</Link>;
+};
+
+type StepNodeProps = ComponentProps<typeof Node> & {
+  data: NodeData;
+  type?: StepTypeEnum;
+};
+
+const StepNode = (props: StepNodeProps) => {
+  const [isRemoving, setIsRemoving] = useState(false);
+  const { id, className, data, type, ...rest } = props;
+  const [isHovered, setIsHovered] = useState(false);
+  const conditionsCount = useConditionsCount(data.controlValues?.skip as RQBJsonLogic);
+  const {
+    isReadOnly,
+    showStepPreview,
+    onNodeDragEnd,
+    onNodeDragMove,
+    onNodeDragStart,
+    draggedNodeId,
+    intersectingNodeId,
+    updateEdges,
+    removeEdges,
+    copyNode,
+    removeNode,
+    selectedNodeId,
+    selectNode,
+  } = useCanvasContext();
+  const isAnyNodeDragging = draggedNodeId !== null;
+  const areActionsVisible = !isAnyNodeDragging && isHovered && !showStepPreview && !!type;
+  const hasConditions = conditionsCount > 0;
+  const isDraggable = !isReadOnly && !showStepPreview;
+
+  const handleMouseEnter = () => {
+    if (!isAnyNodeDragging) {
+      setIsHovered(true);
+    }
+  };
+
+  const handleMouseLeave = () => {
+    setIsHovered(false);
+  };
+
+  const handleRemoveStep = useCallback(() => {
+    setIsRemoving(true);
+
+    removeNode(data.index, {
+      onError: () => {
+        setIsRemoving(false);
+      },
+    });
+  }, [data, removeNode]);
+
+  const handleCopyStep = useCallback(() => {
+    copyNode(data.index);
+  }, [data, copyNode]);
+
+  const handleEditContent = useCallback(() => {
+    if (!id || data.isPending) {
+      return;
+    }
+
+    selectNode(id, 'editor');
+  }, [id, selectNode, data]);
+
+  const handleNodeDragEnd = useCallback(() => {
+    setIsHovered(false);
+    onNodeDragEnd();
+  }, [onNodeDragEnd]);
+
   return (
-    <Link
-      to={buildRoute(ROUTES.TEST_WORKFLOW, {
-        environmentSlug: data.environmentSlug,
-        workflowSlug: data.workflowSlug,
-      })}
-    >
-      {content}
-    </Link>
+    <AnimatePresence>
+      <motion.div
+        layout
+        layoutId={id} // should be a stable id for the animation
+        className={cn('relative pt-1 pl-6 -ml-6')}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        onLayoutAnimationStart={() => removeEdges()}
+        onLayoutAnimationComplete={() => updateEdges()}
+      >
+        <AnimationStepWrapper isPending={data.isPending} isRemoving={isRemoving}>
+          <Node
+            aria-selected={selectedNodeId === id}
+            className={cn(
+              'group transition-all',
+              {
+                'pointer-events-none opacity-40': isAnyNodeDragging && id === draggedNodeId,
+                'pointer-events-none scale-95 border border-dashed border-bg-soft bg-transparent aria-selected:[background-image:none]':
+                  isAnyNodeDragging && id === intersectingNodeId,
+              },
+              className
+            )}
+            nodeId={id}
+            isDraggable={isDraggable}
+            isDragHandleVisible={areActionsVisible}
+            onNodeDragStart={onNodeDragStart}
+            onNodeDragMove={onNodeDragMove}
+            onNodeDragEnd={handleNodeDragEnd}
+            {...rest}
+          >
+            {rest.children}
+          </Node>
+        </AnimationStepWrapper>
+        {hasConditions && (
+          <ConditionBadge
+            conditionsCount={conditionsCount}
+            stepSlug={data.stepSlug ?? ''}
+            conditionsData={data.controlValues?.skip as RQBJsonLogic}
+            className={cn('ml-6 transition-all', {
+              'pointer-events-none opacity-40': isAnyNodeDragging && id === draggedNodeId,
+              'pointer-events-none scale-95 -mt-[2px]': isAnyNodeDragging && id === intersectingNodeId,
+            })}
+          />
+        )}
+        <WorkflowNodeActionBar
+          isVisible={areActionsVisible}
+          stepType={type}
+          stepName={data.name || 'Untitled Step'}
+          onRemoveClick={handleRemoveStep}
+          onEditContentClick={handleEditContent}
+          onCopyClick={handleCopyStep}
+          isReadOnly={isReadOnly}
+        />
+      </motion.div>
+    </AnimatePresence>
   );
 };
 
-type StepNodeProps = ComponentProps<typeof Node> & { data: NodeData };
+const NodeWrapper = ({ children, id, type }: { children: React.ReactNode; id: string; type: StepTypeEnum }) => {
+  const { selectedNodeId, selectNode, showStepPreview } = useCanvasContext();
 
-const StepNode = (props: StepNodeProps) => {
-  const navigate = useNavigate();
-  const { className, data, ...rest } = props;
-  const { stepSlug } = useParams<{
-    stepSlug: string;
-  }>();
+  const handleClick = useCallback(
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      const clickCount = e.detail ?? 1;
 
-  const conditionsCount = useConditionsCount(data.controlValues?.skip as RQBJsonLogic);
+      if (clickCount > 1) {
+        selectNode(id, 'editor');
 
-  const isSelected =
-    getWorkflowIdFromSlug({ slug: stepSlug ?? '', divider: STEP_DIVIDER }) ===
-      getWorkflowIdFromSlug({ slug: data.stepSlug ?? '', divider: STEP_DIVIDER }) &&
-    !!stepSlug &&
-    !!data.stepSlug;
+        return;
+      }
 
-  const hasConditions = conditionsCount > 0;
+      selectNode(id, 'view');
+    },
+    [id, selectNode]
+  );
 
-  if (hasConditions) {
-    return (
-      <Node
-        aria-selected={isSelected}
-        className={cn('group rounded-tl-none [&>span]:rounded-tl-none', className)}
-        pill={
-          <>
-            <RiFilter3Fill className="text-foreground-400 size-3" />
-            <span className="text-foreground-400 text-xs">{conditionsCount}</span>
-          </>
-        }
-        onPillClick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          navigate(buildRoute(ROUTES.EDIT_STEP_CONDITIONS, { stepSlug: data.stepSlug ?? '' }));
-        }}
-        {...rest}
-      />
-    );
-  }
+  const handleKeyDown: KeyboardEventHandler<HTMLDivElement> = (e) => {
+    if (!selectedNodeId) {
+      return;
+    }
 
-  return <Node aria-selected={isSelected} className={cn('group', className)} {...rest} />;
-};
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      e.stopPropagation();
+      selectNode(id, 'editor');
+    }
+  };
 
-const NodeWrapper = ({ children, data }: { children: React.ReactNode; data: NodeData }) => {
-  if (data.readOnly) {
+  if (showStepPreview) {
     return children;
   }
 
   return (
-    <Link
-      to={buildRoute(ROUTES.EDIT_STEP, { stepSlug: data.stepSlug ?? '' })}
-      onClick={(e) => {
-        // Prevent any bubbling that might interfere with the navigation
-        e.stopPropagation();
-      }}
-      className="contents"
+    <div
+      onClick={handleClick}
+      onKeyDown={handleKeyDown}
+      className="cursor-pointer focus-visible:outline-none"
+      data-testid={`${type}-node`}
+      role="button"
+      tabIndex={0}
     >
       {children}
-    </Link>
+    </div>
   );
 };
 
-export const EmailNode = ({ data }: NodeProps<NodeType>) => {
+export const EmailNode = ({ id, data }: NodeProps<NodeType>) => {
+  const { showStepPreview } = useCanvasContext();
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.EMAIL];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.EMAIL}>
+      <StepNode id={id} data={data} type={StepTypeEnum.EMAIL}>
         <NodeHeader type={StepTypeEnum.EMAIL}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.EMAIL]}>
             <Icon />
@@ -153,11 +255,13 @@ export const EmailNode = ({ data }: NodeProps<NodeType>) => {
           <NodeName>{data.name || 'Email Step'}</NodeName>
         </NodeHeader>
 
-        <NodeBody type={StepTypeEnum.EMAIL} showPreview={data.readOnly} controlValues={data.controlValues ?? {}}>
+        <NodeBody type={StepTypeEnum.EMAIL} showPreview={showStepPreview} controlValues={data.controlValues ?? {}}>
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -165,23 +269,26 @@ export const EmailNode = ({ data }: NodeProps<NodeType>) => {
 };
 
 export const SmsNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
+  const { showStepPreview } = useCanvasContext();
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.SMS];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.SMS}>
+      <StepNode id={id} data={data} type={StepTypeEnum.SMS}>
         <NodeHeader type={StepTypeEnum.SMS}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.SMS]}>
             <Icon />
           </NodeIcon>
           <NodeName>{data.name || 'SMS Step'}</NodeName>
         </NodeHeader>
-        <NodeBody showPreview={data.readOnly} type={StepTypeEnum.SMS} controlValues={data.controlValues ?? {}}>
+        <NodeBody showPreview={showStepPreview} type={StepTypeEnum.SMS} controlValues={data.controlValues ?? {}}>
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -189,23 +296,26 @@ export const SmsNode = (props: NodeProps<NodeType>) => {
 };
 
 export const InAppNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
+  const { showStepPreview } = useCanvasContext();
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.IN_APP];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.IN_APP}>
+      <StepNode id={id} data={data} type={StepTypeEnum.IN_APP}>
         <NodeHeader type={StepTypeEnum.IN_APP}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.IN_APP]}>
             <Icon />
           </NodeIcon>
           <NodeName>{data.name || 'In-App Step'}</NodeName>
         </NodeHeader>
-        <NodeBody showPreview={data.readOnly} type={StepTypeEnum.IN_APP} controlValues={data.controlValues ?? {}}>
+        <NodeBody showPreview={showStepPreview} type={StepTypeEnum.IN_APP} controlValues={data.controlValues ?? {}}>
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -213,23 +323,26 @@ export const InAppNode = (props: NodeProps<NodeType>) => {
 };
 
 export const PushNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
+  const { showStepPreview } = useCanvasContext();
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.PUSH];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.PUSH}>
+      <StepNode id={id} data={data} type={StepTypeEnum.PUSH}>
         <NodeHeader type={StepTypeEnum.PUSH}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.PUSH]}>
             <Icon />
           </NodeIcon>
           <NodeName>{data.name || 'Push Step'}</NodeName>
         </NodeHeader>
-        <NodeBody showPreview={data.readOnly} type={StepTypeEnum.PUSH} controlValues={data.controlValues ?? {}}>
+        <NodeBody showPreview={showStepPreview} type={StepTypeEnum.PUSH} controlValues={data.controlValues ?? {}}>
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -237,23 +350,26 @@ export const PushNode = (props: NodeProps<NodeType>) => {
 };
 
 export const ChatNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
+  const { showStepPreview } = useCanvasContext();
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.CHAT];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.CHAT}>
+      <StepNode id={id} data={data} type={StepTypeEnum.CHAT}>
         <NodeHeader type={StepTypeEnum.CHAT}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.CHAT]}>
             <Icon />
           </NodeIcon>
           <NodeName>{data.name || 'Chat Step'}</NodeName>
         </NodeHeader>
-        <NodeBody showPreview={data.readOnly} type={StepTypeEnum.CHAT} controlValues={data.controlValues ?? {}}>
+        <NodeBody showPreview={showStepPreview} type={StepTypeEnum.CHAT} controlValues={data.controlValues ?? {}}>
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -261,12 +377,12 @@ export const ChatNode = (props: NodeProps<NodeType>) => {
 };
 
 export const DelayNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.DELAY];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.DELAY}>
+      <StepNode id={id} data={data} type={StepTypeEnum.DELAY}>
         <NodeHeader type={StepTypeEnum.DELAY}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.DELAY]}>
             <Icon />
@@ -277,7 +393,9 @@ export const DelayNode = (props: NodeProps<NodeType>) => {
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -285,12 +403,12 @@ export const DelayNode = (props: NodeProps<NodeType>) => {
 };
 
 export const DigestNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.DIGEST];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.DIGEST}>
+      <StepNode id={id} data={data} type={StepTypeEnum.DIGEST}>
         <NodeHeader type={StepTypeEnum.DIGEST}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.DIGEST]}>
             <Icon />
@@ -301,7 +419,35 @@ export const DigestNode = (props: NodeProps<NodeType>) => {
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
+        <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
+      </StepNode>
+    </NodeWrapper>
+  );
+};
+
+export const ThrottleNode = (props: NodeProps<NodeType>) => {
+  const { id, data } = props;
+  const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.THROTTLE];
+
+  return (
+    <NodeWrapper id={id} type={StepTypeEnum.THROTTLE}>
+      <StepNode id={id} data={data} type={StepTypeEnum.THROTTLE}>
+        <NodeHeader type={StepTypeEnum.THROTTLE}>
+          <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.THROTTLE]}>
+            <Icon />
+          </NodeIcon>
+          <NodeName>{data.name || 'Throttle Step'}</NodeName>
+        </NodeHeader>
+        <NodeBody type={StepTypeEnum.THROTTLE} controlValues={data.controlValues ?? {}}>
+          {data.content}
+        </NodeBody>
+        {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
+        <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
@@ -309,12 +455,12 @@ export const DigestNode = (props: NodeProps<NodeType>) => {
 };
 
 export const CustomNode = (props: NodeProps<NodeType>) => {
-  const { data } = props;
+  const { id, data } = props;
   const Icon = STEP_TYPE_TO_ICON[StepTypeEnum.CUSTOM];
 
   return (
-    <NodeWrapper data={data}>
-      <StepNode data={data}>
+    <NodeWrapper id={id} type={StepTypeEnum.CUSTOM}>
+      <StepNode id={id} data={data} type={StepTypeEnum.CUSTOM}>
         <NodeHeader type={StepTypeEnum.CUSTOM}>
           <NodeIcon variant={STEP_TYPE_TO_COLOR[StepTypeEnum.CUSTOM]}>
             <Icon />
@@ -325,53 +471,56 @@ export const CustomNode = (props: NodeProps<NodeType>) => {
           {data.content}
         </NodeBody>
         {data.error && <NodeError>{data.error}</NodeError>}
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
         <Handle isConnectable={false} className={handleClassName} type="source" position={Position.Bottom} id="b" />
       </StepNode>
     </NodeWrapper>
   );
 };
 
-export const AddNode = (_props: NodeProps<NodeType>) => {
-  const { workflow, update } = useWorkflow();
-  const navigate = useNavigate();
-
-  if (!workflow) {
-    return null;
-  }
-
-  const isReadOnly = workflow.origin === WorkflowOriginEnum.EXTERNAL;
+export const AddNode = (props: NodeProps<NodeType>) => {
+  const { isReadOnly, intersectingNodeId, addNode, removeEdges, updateEdges } = useCanvasContext();
+  const { id, data } = props;
+  const isIntersecting = intersectingNodeId === id;
 
   if (isReadOnly) {
     return null;
   }
 
   return (
-    <div className="flex w-[300px] cursor-pointer justify-center">
-      <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
-      <AddStepMenu
-        visible
-        onMenuItemClick={(stepType) => {
-          update(
-            {
-              ...workflow,
-              steps: [...workflow.steps, createStep(stepType)],
-            },
-            {
-              onSuccess: (data) => {
-                if (TEMPLATE_CONFIGURABLE_STEP_TYPES.includes(stepType)) {
-                  navigate(
-                    buildRoute(ROUTES.EDIT_STEP_TEMPLATE, {
-                      workflowSlug: workflow.slug,
-                      stepSlug: data.steps[data.steps.length - 1].slug,
-                    })
-                  );
-                }
-              },
-            }
-          );
-        }}
-      />
-    </div>
+    <AnimatePresence>
+      <motion.div
+        layout
+        layoutId={id} // should be a stable id for the animation
+        className="flex cursor-pointer justify-center items-center"
+        style={{ width: NODE_WIDTH, height: 32 }}
+        data-droppable-add-node-id={id}
+        onLayoutAnimationStart={() => removeEdges()}
+        onLayoutAnimationComplete={() => updateEdges()}
+      >
+        {/* biome-ignore lint/correctness/useUniqueElementIds: used internally by react-flow */}
+        <Handle isConnectable={false} className={handleClassName} type="target" position={Position.Top} id="a" />
+        <div
+          className="bg-background rounded-lg border border-dashed border-bg-soft flex items-center justify-center gap-1"
+          style={{
+            position: 'absolute',
+            transition: 'opacity 0.2s ease-in-out',
+            fontSize: 12,
+            pointerEvents: 'all',
+            width: NODE_WIDTH,
+            height: 32,
+            opacity: isIntersecting ? 1 : 0,
+          }}
+        >
+          <RiInsertRowTop className="size-3.5 text-text-soft" />
+          <span className="text-label-xs text-text-soft">Drop here</span>
+        </div>
+        {!isIntersecting && (
+          <AddStepMenu visible className="-mt-1" onMenuItemClick={(stepType) => addNode(data.index, stepType)} />
+        )}
+      </motion.div>
+    </AnimatePresence>
   );
 };

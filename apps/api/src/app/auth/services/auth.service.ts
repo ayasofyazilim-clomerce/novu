@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { MemberEntity, SubscriberEntity, UserEntity } from '@novu/dal';
-import { AuthProviderEnum, AuthenticateContext, ISubscriberJwt, UserSessionData } from '@novu/shared';
 import { IAuthService } from '@novu/application-generic';
+import { MemberEntity, SubscriberEntity, UserEntity } from '@novu/dal';
+import { AuthenticateContext, AuthProviderEnum, ISubscriberJwt, UserSessionData } from '@novu/shared';
 
 @Injectable()
 export class AuthService implements IAuthService {
@@ -36,8 +36,8 @@ export class AuthService implements IAuthService {
     return this.authService.getUserByApiKey(apiKey);
   }
 
-  getSubscriberWidgetToken(subscriber: SubscriberEntity): Promise<string> {
-    return this.authService.getSubscriberWidgetToken(subscriber);
+  getSubscriberWidgetToken(subscriber: SubscriberEntity, contextKeys?: string[]): Promise<string> {
+    return this.authService.getSubscriberWidgetToken(subscriber, contextKeys);
   }
 
   generateUserToken(user: UserEntity): Promise<string> {

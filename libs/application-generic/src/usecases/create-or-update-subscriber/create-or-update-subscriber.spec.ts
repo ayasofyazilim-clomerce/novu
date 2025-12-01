@@ -1,15 +1,9 @@
 import { Test } from '@nestjs/testing';
-import { UserSession } from '@novu/testing';
 import { SubscriberRepository } from '@novu/dal';
-
-import { CreateOrUpdateSubscriberCommand } from './create-or-update-subscriber.command';
-
-import {
-  CacheInMemoryProviderService,
-  CacheService,
-  InvalidateCacheService,
-} from '../../services';
+import { UserSession } from '@novu/testing';
+import { CacheInMemoryProviderService, CacheService, InvalidateCacheService } from '../../services';
 import { UpdateSubscriber } from '../update-subscriber';
+import { CreateOrUpdateSubscriberCommand } from './create-or-update-subscriber.command';
 import { CreateOrUpdateSubscriberUseCase } from './create-or-update-subscriber.usecase';
 
 const cacheInMemoryProviderService = {
@@ -22,8 +16,7 @@ const cacheInMemoryProviderService = {
 const cacheService = {
   provide: CacheService,
   useFactory: async () => {
-    const factoryCacheInMemoryProviderService =
-      await cacheInMemoryProviderService.useFactory();
+    const factoryCacheInMemoryProviderService = await cacheInMemoryProviderService.useFactory();
 
     const service = new CacheService(factoryCacheInMemoryProviderService);
     await service.initialize();
@@ -32,7 +25,7 @@ const cacheService = {
   },
 };
 
-describe('Create Subscriber', function () {
+describe('Create Subscriber', () => {
   let useCase: CreateOrUpdateSubscriberUseCase;
   let session: UserSession;
 
@@ -45,12 +38,10 @@ describe('Create Subscriber', function () {
     session = new UserSession();
     await session.initialize();
 
-    useCase = moduleRef.get<CreateOrUpdateSubscriberUseCase>(
-      CreateOrUpdateSubscriberUseCase,
-    );
+    useCase = moduleRef.get<CreateOrUpdateSubscriberUseCase>(CreateOrUpdateSubscriberUseCase);
   });
 
-  it('should create a subscriber', async function () {
+  it('should create a subscriber', async () => {
     const locale = 'en';
     const result = await useCase.execute(
       CreateOrUpdateSubscriberCommand.create({
@@ -60,13 +51,13 @@ describe('Create Subscriber', function () {
         email: 'dima@asdasdas.com',
         firstName: 'ASDAS',
         locale,
-      }),
+      })
     );
 
     expect(result.locale).toEqual(locale);
   });
 
-  it('should update the subscriber when same id provided', async function () {
+  it('should update the subscriber when same id provided', async () => {
     const subscriberId = '1234';
     const email = 'dima@asdasdas.com';
     const noLocale = 'no';
@@ -79,7 +70,7 @@ describe('Create Subscriber', function () {
         email,
         firstName: 'First Name',
         locale: 'en',
-      }),
+      })
     );
 
     const result = await useCase.execute(
@@ -90,7 +81,7 @@ describe('Create Subscriber', function () {
         email,
         firstName: 'Second Name',
         locale: noLocale,
-      }),
+      })
     );
 
     expect(result.firstName).toEqual('Second Name');

@@ -1,8 +1,8 @@
 import { Inject, Injectable, Scope } from '@nestjs/common';
-import type { Request, Response } from 'express';
+import { GetDecryptedSecretKey, GetDecryptedSecretKeyCommand } from '@novu/application-generic';
 import { PostActionEnum, type Workflow } from '@novu/framework/internal';
 import { Client, NovuHandler, NovuRequestHandler } from '@novu/framework/nest';
-import { GetDecryptedSecretKey, GetDecryptedSecretKeyCommand } from '@novu/application-generic';
+import type { Request, Response } from 'express';
 import { ConstructFrameworkWorkflow, ConstructFrameworkWorkflowCommand } from './usecases/construct-framework-workflow';
 
 /*
@@ -44,8 +44,11 @@ export class NovuBridgeClient {
         ConstructFrameworkWorkflowCommand.create({
           environmentId: req.params.environmentId,
           workflowId: req.query.workflowId as string,
+          layoutId: req.query.layoutId as string,
           controlValues: req.body.controls,
           action: req.query.action as PostActionEnum,
+          skipLayoutRendering: req.query.skipLayoutRendering === 'true',
+          jobId: req.query.jobId ? (req.query.jobId as string) : undefined,
         })
       );
 
