@@ -23,6 +23,7 @@ import {
   ContextRepository,
   JobEntity,
   NotificationTemplateRepository,
+  SubscriberEntity,
   SubscriberRepository,
   TenantEntity,
   TenantRepository,
@@ -102,6 +103,7 @@ export class SendMessage {
       bridgeResponse = await this.executeBridgeJob.execute({
         ...command,
         variables,
+        workflow: command.workflow,
       });
     }
     const isBridgeSkipped = bridgeResponse?.options?.skip;
@@ -119,7 +121,7 @@ export class SendMessage {
       );
     }
 
-    const { stepCondition, channelPreference } = await this.evaluateFilters(command, variables);
+    const { stepCondition, channelPreference } = await this.evaluateFilters(command, variables, payload);
     if (!command.payload?.$on_boarding_trigger) {
       this.sendProcessStepEvent(
         command,
@@ -213,14 +215,15 @@ export class SendMessage {
 
   private async evaluateFilters(
     command: SendMessageCommand,
-    variables: IFilterVariables
+    variables: IFilterVariables,
+    compileContext: SendMessageChannelCommand['compileContext']
   ): Promise<{
     stepCondition: IConditionsFilterResponse;
     channelPreference: { result: boolean; reason?: DetailEnum };
   }> {
     const [stepCondition, channelPreference] = await Promise.all([
       this.evaluateStepCondition(command, variables),
-      this.evaluateChannelPreference(command),
+      this.evaluateChannelPreference(command, compileContext),
     ]);
 
     return { stepCondition, channelPreference };
@@ -321,7 +324,8 @@ export class SendMessage {
 
   @Instrument()
   private async evaluateChannelPreference(
-    command: SendMessageCommand
+    command: SendMessageCommand,
+    compileContext: SendMessageChannelCommand['compileContext']
   ): Promise<{ result: boolean; reason?: DetailEnum }> {
     const { job } = command;
 
@@ -329,15 +333,14 @@ export class SendMessage {
       return { result: true };
     }
 
-    const workflow = await this.getWorkflow({
-      _id: job._templateId,
-      environmentId: job._environmentId,
-    });
+    const workflow =
+      command.workflow ??
+      (await this.getWorkflow({
+        _id: job._templateId,
+        environmentId: job._environmentId,
+      }));
 
-    const subscriber = await this.getSubscriberBySubscriberId({
-      _environmentId: job._environmentId,
-      subscriberId: job.subscriberId,
-    });
+    const subscriber = compileContext.subscriber;
     if (!subscriber) throw new PlatformException(`Subscriber not found with id ${job._subscriberId}`);
 
     let subscriberPreference: { enabled: boolean; channels: IPreferenceChannels };
@@ -371,6 +374,7 @@ export class SendMessage {
           subscriber,
           tenant: job.tenant,
           includeInactiveChannels: false,
+          contextKeys: job.contextKeys,
         })
       );
       subscriberPreference = preference;
@@ -454,7 +458,7 @@ export class SendMessage {
   private async resolveContext(command: SendMessageCommand): Promise<ContextResolved> {
     const { contextKeys, environmentId, organizationId } = command;
 
-    if (!contextKeys || contextKeys.length === 0) {
+    if (contextKeys.length === 0) {
       return {} as ContextResolved;
     }
 
@@ -473,13 +477,6 @@ export class SendMessage {
     return await this.notificationTemplateRepository.findById(_id, environmentId);
   }
 
-  @CachedResponse({
-    builder: (command: { subscriberId: string; _environmentId: string }) =>
-      buildSubscriberKey({
-        _environmentId: command._environmentId,
-        subscriberId: command.subscriberId,
-      }),
-  })
   public async getSubscriberBySubscriberId({
     subscriberId,
     _environmentId,

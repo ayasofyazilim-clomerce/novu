@@ -20,7 +20,7 @@ import {
 } from '@/components/primitives/constants';
 import { useDataRef } from '@/hooks/use-data-ref';
 
-const variants = cva('h-full w-full flex-1 [&_.cm-focused]:outline-none', {
+const variants = cva('h-full w-full flex-1 [&>.cm-focused]:outline-hidden!', {
   variants: {
     size: {
       md: 'text-sm',
@@ -158,6 +158,12 @@ const baseTheme = (options: { multiline?: boolean }) =>
       margin: '4px 0',
       padding: '4px',
       width: '100%',
+      overflowY: 'auto',
+      scrollbarWidth: 'none',
+      msOverflowStyle: 'none',
+      '&::-webkit-scrollbar': {
+        display: 'none',
+      },
     },
     '.cm-tooltip-autocomplete.cm-tooltip > ul > li[role="option"]': {
       display: 'flex',
@@ -174,8 +180,13 @@ const baseTheme = (options: { multiline?: boolean }) =>
       width: '100%',
       maxWidth: '100%',
       overflow: 'hidden',
+    },
+    '.cm-tooltip-autocomplete.cm-tooltip > ul > li[role="option"] .cm-completionLabel': {
+      overflow: 'hidden',
       textOverflow: 'ellipsis',
       whiteSpace: 'nowrap',
+      flex: '1',
+      minWidth: '0',
     },
     '.cm-tooltip-autocomplete.cm-tooltip > ul > li[aria-selected="true"]': {
       backgroundColor: 'hsl(var(--neutral-100))',

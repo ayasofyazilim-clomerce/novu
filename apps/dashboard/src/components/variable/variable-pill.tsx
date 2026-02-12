@@ -17,8 +17,9 @@ export const VariablePill = React.forwardRef<
     from?: VariableFrom;
     isNotInSchema?: boolean;
     isPayloadSchemaEnabled?: boolean;
+    errorMessage?: string;
   }
->(({ variableName, filters, issues, className, onClick, isNotInSchema, isPayloadSchemaEnabled }, ref) => {
+>(({ variableName, filters, issues, className, onClick, isNotInSchema, isPayloadSchemaEnabled, errorMessage }, ref) => {
   const displayVariableName = useMemo(() => {
     if (!variableName) return '';
     const variableParts = variableName.split('.');
@@ -27,7 +28,11 @@ export const VariablePill = React.forwardRef<
   }, [variableName]);
 
   return (
-    <VariableTooltip issues={issues} isNotInSchema={isPayloadSchemaEnabled ? isNotInSchema : false}>
+    <VariableTooltip
+      issues={issues}
+      isNotInSchema={isPayloadSchemaEnabled ? isNotInSchema : false}
+      errorMessage={errorMessage}
+    >
       <span
         ref={ref}
         onClick={onClick}
@@ -44,7 +49,7 @@ export const VariablePill = React.forwardRef<
           isNotInSchema={isPayloadSchemaEnabled ? isNotInSchema : false}
         />
         {/* INFO: Keep the color defined on the span to avoid overriding it in maily components for example button */}
-        <span className="leading-1 text-text-sub max-w-[24ch] truncate" title={displayVariableName}>
+        <span className="text-label-xs text-text-sub max-w-[24ch] truncate" title={displayVariableName}>
           {displayVariableName}
         </span>
         <FiltersSection filters={filters} />

@@ -57,6 +57,7 @@ export class BuildStepIssuesUsecase {
       controlSchema,
       controlsDto: controlValuesDto,
       stepType,
+      preloadedControlValues,
     } = command;
 
     const variableSchema = await this.buildAvailableVariableSchemaUsecase.execute(
@@ -68,25 +69,29 @@ export class BuildStepIssuesUsecase {
         workflow: persistedWorkflow,
         ...(controlValuesDto ? { optimisticControlValues: controlValuesDto } : {}),
         ...(command.optimisticSteps ? { optimisticSteps: command.optimisticSteps } : {}),
+        ...(preloadedControlValues ? { preloadedControlValues } : {}),
       })
     );
 
     let newControlValues = controlValuesDto;
 
     if (!newControlValues) {
-      newControlValues = (
-        await this.controlValuesRepository.findOne({
-          _environmentId: user.environmentId,
-          _organizationId: user.organizationId,
-          _workflowId: persistedWorkflow?._id,
-          _stepId: stepInternalId,
-          level: ControlValuesLevelEnum.STEP_CONTROLS,
-        })
-      )?.controls;
+      if (preloadedControlValues && stepInternalId) {
+        newControlValues = preloadedControlValues.find((cv) => cv._stepId === stepInternalId)?.controls;
+      } else {
+        newControlValues = (
+          await this.controlValuesRepository.findOne({
+            _environmentId: user.environmentId,
+            _organizationId: user.organizationId,
+            _workflowId: persistedWorkflow?._id,
+            _stepId: stepInternalId,
+            level: ControlValuesLevelEnum.STEP_CONTROLS,
+          })
+        )?.controls;
+      }
     }
 
     const sanitizedControlValues = this.sanitizeControlValues(newControlValues, workflowOrigin, stepType);
-
     const schemaIssues = processControlValuesBySchema({
       controlSchema,
       controlValues: sanitizedControlValues || {},
@@ -159,12 +164,28 @@ export class BuildStepIssuesUsecase {
   ): Record<string, unknown> | undefined | null {
     if (typeof obj !== 'object' || obj === null || obj === undefined) return obj;
 
+    if (Array.isArray(obj)) {
+      return obj.map((item) => {
+        if (typeof item === 'string' && item.trim() === '') {
+          return null;
+        }
+        if (typeof item === 'object' && item !== null) {
+          return this.frameworkSanitizeEmptyStringsToNull(item as Record<string, unknown>);
+        }
+
+        return item;
+      }) as any;
+    }
+
     return Object.fromEntries(
       Object.entries(obj).map(([key, value]) => {
         if (typeof value === 'string' && value.trim() === '') {
           return [key, null];
         }
-        if (typeof value === 'object') {
+        if (Array.isArray(value)) {
+          return [key, this.frameworkSanitizeEmptyStringsToNull(value as any)];
+        }
+        if (typeof value === 'object' && value !== null) {
           return [key, this.frameworkSanitizeEmptyStringsToNull(value as Record<string, unknown>)];
         }
 

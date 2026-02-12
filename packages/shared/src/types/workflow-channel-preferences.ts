@@ -1,4 +1,3 @@
-import type { RulesLogic } from 'json-logic-js';
 import { ChannelTypeEnum } from './channel';
 import { DeepPartial } from './utils';
 /**
@@ -10,7 +9,7 @@ import { DeepPartial } from './utils';
  * 1. `SUBSCRIPTION_SUBSCRIBER_WORKFLOW` - The subscriber's preference for a workflow scoped to a subscription.
  * 2. `SUBSCRIBER_WORKFLOW` - The subscriber's preference for a workflow.
  * 3. `SUBSCRIBER_GLOBAL` - The subscriber's global preference.
- * 4. `USER_WORKFLOW` - The user's preference for a workflow.
+ * 4. `USER_WORKFLOW` - The user's preference for a workflow in the dashboard.
  * 5. `WORKFLOW_RESOURCE` - The Framework-defined preference for a workflow.
  */
 export enum PreferencesTypeEnum {
@@ -53,7 +52,7 @@ export type WorkflowPreference = {
    *
    * If not provided, the `enabled` property will be used to determine if the preference is applicable.
    */
-  condition?: RulesLogic;
+  condition?: any;
 };
 
 /** A preference for a notification delivery channel. */
